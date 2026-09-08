@@ -17,7 +17,6 @@ import { writeFileSync } from "fs"
 import { join } from "path"
 import * as core from "./autolearn-core.mjs"
 
-const GUARD = Symbol.for("opencode:autolearn")
 
 // @spec CM-GUARD-001
 export const AutolearnPlugin = async (ctx) => {
@@ -30,11 +29,14 @@ export const AutolearnPlugin = async (ctx) => {
   const { client, directory, worktree } = ctx
   core.ensureStore()
 
-  // @spec CM-GUARD-002
-  const isPrimary = !globalThis[GUARD]
-  if (isPrimary) globalThis[GUARD] = true
+  // @spec CM-GUARD-002 — per-directory guard. Keyed by directory so each
+  // monitored dir's instance is independently primary; opencode routes events
+  // per-directory, so only the active project's instance receives them.
+  const dirGuard = Symbol.for("opencode:autolearn:" + directory)
+  const isPrimary = !globalThis[dirGuard]
+  if (isPrimary) globalThis[dirGuard] = true
   if (!isPrimary) {
-    core.dbg("SKIPPING: secondary plugin instance, guard already set")
+    core.dbg("SKIPPING: secondary plugin instance, guard already set", { directory, worktree })
     return {}
   }
 
@@ -74,7 +76,7 @@ export const AutolearnPlugin = async (ctx) => {
     // throttle denies the spawn (busy window / duplicate), the buffer stays
     // intact and this content rides the NEXT trigger instead of being lost.
     const reviewMd = core.formatReview(buffer, { project: projectName(), trigger })
-    if (!core.throttleCheck(reviewMd)) {
+    if (!core.throttleCheck(reviewMd, false)) {
       core.dbg("REVIEW QUEUED by throttle (v1)", buffer.length, "messages, trigger", trigger)
       return
     }

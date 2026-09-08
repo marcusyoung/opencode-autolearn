@@ -172,8 +172,18 @@ uv run $HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py search query
 - Past sessions reveal a pattern you missed → record as new observation
 - No relevant past sessions → proceed normally
 
-**First-time setup:** If the search returns an error about the index not existing,
-run `autolearn.py search init` first, then retry the query.
+**First-time setup (CORRECTED):** `search query` NEVER errors when the index is missing or
+empty - `cmd_search_query` calls `init_search_schema()` which auto-creates the search.db
+schema, and an empty index returns "No results" with exit code 0. So an error-based check
+for "index not existing" is a dead branch - it never fires and the index never self-populates.
+Instead: if `search query` returns "No results" unexpectedly, or the index may never have been
+built (fresh/~40KB search.db), run `autolearn.py search init` FIRST (idempotent full rebuild
+from OpenCode's opencode.db), then retry the query. Verify population by row count
+(SELECT COUNT(*) FROM session_text > 0), not file size - search.db is in WAL mode and size lags.
+Staleness check: run `search status` and compare "Last indexed part (v1)" against the newest
+review in ~/.autolearn/personas/default/reviews/ — if any review postdates the watermark,
+run `search init` (incremental) to catch the index up before relying on query results.
+
 
 ### Step 4: Record observations (behavioral rules, memory, user profile, and skills)
 
