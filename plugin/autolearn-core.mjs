@@ -51,6 +51,23 @@ export const REVIEWS_DIR = join(DEFAULT_PERSONA_DIR, "reviews")
 export const SKILLS_DIR = join(DEFAULT_PERSONA_DIR, "skills")
 export const ARCHIVE_DIR = join(SKILLS_DIR, ".archive")
 export const WRAPPER_SCRIPT = join(BIN_DIR, "review-runner.sh")
+// Hidden-launch wrapper for `uv` on Windows: reassembles all its arguments
+// into a quoted command run with WindowStyle 0, so the WHOLE process tree
+// (uv -> python) stays off-screen.
+// Required because windowsHide only hides the immediate child; uv's python
+// grandchild would otherwise pop a visible console window.
+// Hidden-launch wrapper lives in the user's script dir (~/.local/bin) so it
+// pre-exists before any `uv` spawn (ensureWrapper only runs on first review,
+// which is too late for the startup `uv` calls). Deployed by install-windows.ps1.
+export const HIDE_UV_VBS = join(process.env.USERPROFILE || "", ".local", "bin", "hide-uv.vbs")
+export const HIDE_UV_VBS_CONTENT = `Set sh = CreateObject("WScript.Shell")
+Dim cmdline, i
+cmdline = ""
+For i = 0 To WScript.Arguments.Count - 1
+    cmdline = cmdline & """" & WScript.Arguments(i) & """" & " "
+Next
+sh.Run Trim(cmdline), 0, False
+`
 export const SYNC_CONFIG_FILE = join(AL_HOME, "sync.yaml")
 export const SALT_FILE = join(AL_HOME, ".encryption_salt")
 // Skills consolidated into a single `autolearn` skill (scripts/ moved from
@@ -164,21 +181,30 @@ export function syncBackground(command) {
 // host's event loop alive (e.g. memory compose).
 export function spawnDetached(cmd, opts = {}) {
   const { unref, ...spawnOpts } = opts
+  // Windows: windowsHide only hides the immediate child. `uv run` spawns python
+  // (console subsystem) which still pops a visible console. Route `uv` through a
+  // hidden VBS launcher so the whole process tree stays off-screen.
+  const winCmd =
+    process.platform === "win32" && cmd[0] === "uv"
+      ? ["wscript.exe", HIDE_UV_VBS, ...cmd]
+      : cmd
   if (typeof Bun !== "undefined" && typeof Bun.spawn === "function") {
-    const proc = Bun.spawn(cmd, {
+    const proc = Bun.spawn(winCmd, {
       stdout: "ignore",
       stderr: "ignore",
       stdin: "ignore",
       detached: true,
+      windowsHide: true,
       ...spawnOpts,
       env: spawnOpts.env || { ...process.env },
     })
     try { unref ? proc.unref() : proc.ref() } catch {}
     return proc
   }
-  const proc = nodeSpawn(cmd[0], cmd.slice(1), {
+  const proc = nodeSpawn(winCmd[0], winCmd.slice(1), {
     stdio: "ignore",
     detached: true,
+    windowsHide: true,
     ...spawnOpts,
     env: spawnOpts.env || { ...process.env },
   })
@@ -313,6 +339,12 @@ function ensureWrapper() {
     try { chmodSync(WRAPPER_SCRIPT, 0o644) } catch {}
     writeFileSync(WRAPPER_SCRIPT, WRAPPER_CONTENT)
     chmodSync(WRAPPER_SCRIPT, 0o544) // r-x: executable, NOT writable
+    // Hidden uv launcher (Windows only) — keeps uv + its python child off the
+    // console. Gated on win32 so POSIX installs never write HIDE_UV_VBS (its
+    // path is relative when USERPROFILE is unset).
+    if (process.platform === "win32") {
+      try { writeFileSync(HIDE_UV_VBS, HIDE_UV_VBS_CONTENT) } catch (e) { dbg("ensureWrapper hide-uv.vbs failed:", e.message) }
+    }
   } catch (err) {
     dbg("ensureWrapper failed:", err.message)
   }
@@ -602,7 +634,14 @@ export function runReviewSubprocess({ reviewMd, filePrefix = "review", title, cw
 
   // @spec CM-RS-008, CM-RS-009, CM-RS-010
   const args = [reviewMd, "--agent", "autolearn-reviewer", "--title", title]
-  spawnDetached([WRAPPER_SCRIPT, ...args], {
+  // Windows cannot exec a #!/bin/sh wrapper directly. Prepend a POSIX shell
+  // (override via AUTOLEARN_BASH_BIN, else "bash" resolved from PATH) on
+  // win32; POSIX keeps the shebang behaviour unchanged.
+  const shell = process.platform === "win32"
+    ? (process.env.AUTOLEARN_BASH_BIN || "bash")
+    : null
+  const wrapperCmd = shell ? [shell, WRAPPER_SCRIPT, ...args] : [WRAPPER_SCRIPT, ...args]
+  spawnDetached(wrapperCmd, {
     cwd: cwd || process.cwd(),
     env: { ...process.env, AUTOLEARN_REVIEWER: "1", ...(env || {}) },
   })

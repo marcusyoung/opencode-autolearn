@@ -58,8 +58,21 @@ conversation involves a workaround that may have come up before.
 
 **What to do with results:** the same correction appears before → strong
 signal, strengthen the memory; a pattern you missed → record as new
-observation; nothing relevant → proceed normally. If the search errors
-about a missing index, run `autolearn.py search init` first, then retry.
+observation; nothing relevant → proceed normally.
+
+**First-time setup (CORRECTED):** `search query` NEVER errors when the index
+is missing or empty — it auto-creates the search.db schema and an empty index
+returns "No results" with exit code 0. So an error-based check for "index not
+existing" is a dead branch: it never fires and the index never self-populates.
+Instead: if `search query` returns "No results" unexpectedly, or the index may
+never have been built (fresh / ~40KB search.db), run `autolearn.py search init`
+FIRST (idempotent full rebuild from OpenCode's opencode.db), then retry the
+query. Verify population by row count (`SELECT COUNT(*) FROM session_text > 0`),
+not file size — search.db is in WAL mode and size lags.
+Staleness check: run `search status` and compare "Last indexed part (v1)"
+against the newest review in `~/.autolearn/personas/default/reviews/` — if any
+review postdates the watermark, run `search init` (incremental) to catch the
+index up before relying on query results.
 
 ### Step 3.5: Read the wiki before concluding or proposing (MANDATORY)
 
@@ -181,6 +194,15 @@ uv run $HOME/.agents/skills/autolearn/scripts/autolearn.py proposals recurrence 
   verified — creation is deferred, nothing is lost.
 - Command errors or missing index → treat as `recurrent=false` (fail-safe:
   record a memory, do not create).
+- **Query construction & contamination (observed 2026-09-19):** the gate result
+  is only as good as the query. Two failure modes: (1) TOPIC-VAGUE queries over
+  common words (e.g. "openchamber extension backlog") return `recurrent=true`
+  from mere FTS co-occurrence across unrelated sessions — probe with the
+  pattern's DISTINCTIVE technical terms (e.g. "openchamber extension sdk panel
+  manifest"); (2) reviewer sessions are indexed, so a first-session pattern can
+  self-inflate when the reviewer's own transcript quotes the material. When gate
+  results disagree across queries, trust the precise/distinctive-terms probe and
+  prefer fail-safe: record a memory, do not create.
 
 PATCHING an existing skill (`skill patch`) is **not** gated — patch
 whenever an existing skill was wrong or incomplete.
