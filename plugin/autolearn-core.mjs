@@ -223,7 +223,9 @@ const WRAPPER_CONTENT = `#!/bin/sh
 # Autolearn review runner - runs an opencode review, deletes the session,
 # then pushes the updated store via sync (if configured).
 # Works with OpenCode v1 (opencode) and v2 beta (opencode2).
-# Args: passed directly to \`<binary> run --format json\` ($1 = review md path)
+# Args: none required. The review file path arrives via AUTOLEARN_REVIEW_FILE
+# and is attached to the run with --file; a legacy caller that still passes the
+# review markdown CONTENT as $1 is supported (spilled to a temp file).
 #
 # Wrapper-side throttle (defense in depth): plugin instances already in
 # memory predate the in-plugin throttle and keep calling this script, so
@@ -251,10 +253,20 @@ fi
 # Convert ms -> seconds for the shell arithmetic.
 MIN_INTERVAL_S=\$(( MIN_INTERVAL / 1000 ))
 NOW=\$(date +%s)
+# Resolve the review file. New plugins pass the PATH via AUTOLEARN_REVIEW_FILE
+# (content never touches argv - Windows caps a spawned process's argv at
+# ~32 KB, and embedding a large conversation slice raised ENAMETOOLONG).
+# Older in-memory plugin instances still pass the markdown CONTENT as \$1,
+# so keep that fallback: spill it to a temp file and use that.
+REVIEW_FILE="\${AUTOLEARN_REVIEW_FILE:-}"
+REVIEW_TMP=""
+if [ -z "\$REVIEW_FILE" ] || [ ! -f "\$REVIEW_FILE" ]; then
+  REVIEW_TMP=\$(mktemp "\${TMPDIR:-/tmp}/alreview-md.XXXXXX")
+  printf '%s' "\$1" > "\$REVIEW_TMP"
+  REVIEW_FILE="\$REVIEW_TMP"
+fi
 # Gate 3 first (cheap, no state change): identical conversation → skip.
-# NOTE: the plugin passes the review markdown CONTENT as \$1 (it becomes the
-# prompt), not a file path.
-CONV=\$(printf '%s' "\$1" | sed -n '/## Conversation/,\$p')
+CONV=\$(sed -n '/## Conversation/,\$p' "\$REVIEW_FILE")
 HASH=""
 if [ -n "\$CONV" ]; then
   HASH=\$(printf '%s' "\$CONV" | md5 -q 2>/dev/null || printf '%s' "\$CONV" | md5sum | cut -d' ' -f1)
@@ -282,7 +294,7 @@ if ! mkdir "\$GATE" 2>/dev/null; then
   fi
 fi
 printf '%s\\n' "\$NOW" > "\$GATE/ts" 2>/dev/null
-trap 'rm -rf "\$GATE" 2>/dev/null' EXIT
+trap 'rm -rf "\$GATE" 2>/dev/null; [ -n "\$REVIEW_TMP" ] && rm -f "\$REVIEW_TMP"' EXIT
 # Record start BEFORE running so a killed review still consumes the interval
 # (fail-safe: a broken binary must not cause an endless retry loop).
 printf '%s:%s\\n' "\$NOW" "\$HASH" > "\$LOCK" 2>/dev/null
@@ -295,7 +307,7 @@ fi
 # pi branch: one-shot print-mode review, ephemeral (--no-session),
 # project-local resources ignored (-na), review md piped on stdin.
 if [ "\$(basename "\$OC")" = "pi" ]; then
-  printf '%s' "\$1" | "\$OC" -p --no-session -na >/dev/null 2>&1
+  cat "\$REVIEW_FILE" | "\$OC" -p --no-session -na >/dev/null 2>&1
   AL_CLI="\$HOME/.agents/skills/autolearn/scripts/autolearn.py"
   [ -f "\$AL_CLI" ] || AL_CLI="\$HOME/.agents/skills/autolearn-reviewer/scripts/autolearn.py"
   if [ -n "\${AUTOLEARN_SYNC_API_KEY:-}" ] && [ -f "\${HOME}/.autolearn/.encryption_salt" ] && [ -f "\$AL_CLI" ]; then
@@ -304,7 +316,8 @@ if [ "\$(basename "\$OC")" = "pi" ]; then
   exit 0
 fi
 OUT=\$(mktemp "\${TMPDIR:-/tmp}/alreview.XXXXXX")
-"\$OC" run --format json "\$@" > "\$OUT" 2>/dev/null
+REVIEW_TITLE="\${AUTOLEARN_REVIEW_TITLE:-autolearn review}"
+"\$OC" run --format json --agent autolearn-reviewer --title "\$REVIEW_TITLE" --file "\$REVIEW_FILE" "The autolearn session review is attached as a file (path: \$REVIEW_FILE). Load the autolearn skill and follow references/reviewer.md to act on it; if the review content is not shown inline, read that file." > "\$OUT" 2>/dev/null
 # BRE backslashes below are DOUBLED (\\\\, \\1) because this script lives
 # inside a JS template literal — single backslashes get eaten by the escape
 # evaluation (\\( -> ( , \\1 -> 0x01 control char under Bun) and the sed
@@ -606,6 +619,36 @@ export function throttleCheck(reviewMd, commit = true) {
 }
 
 /**
+ * Resolve a harness binary that actually exists on PATH, preferring `name`
+ * and falling back in the given order. Returns an env fragment ({} when
+ * nothing resolves, so the wrapper's own detection takes over).
+ *
+ * Why: a shell pinning a binary that is NOT installed makes every spawn a
+ * silent no-op — the wrapper runs "<missing> run ..." with output discarded,
+ * so the review neither runs nor errors. Observed 2026-09-22: autolearn-v2.js
+ * pinned AUTOLEARN_OPENCODE_BIN=opencode2 on a machine with only opencode,
+ * so every v2-spawned review vanished without a trace.
+ */
+export function harnessBinEnv(name, fallbacks = ["opencode", "pi"]) {
+  const candidates = [name, ...fallbacks].filter(Boolean)
+  const pathEnv = process.env.PATH || ""
+  const sep = process.platform === "win32" ? ";" : ":"
+  const exts = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  for (const candidate of candidates) {
+    if (typeof Bun !== "undefined" && typeof Bun.which === "function") {
+      try { if (Bun.which(candidate)) return { AUTOLEARN_HARNESS_BIN: candidate } } catch {}
+      continue
+    }
+    for (const dir of pathEnv.split(sep)) {
+      for (const ext of exts) {
+        try { if (dir && existsSync(join(dir, candidate + ext))) return { AUTOLEARN_HARNESS_BIN: candidate } } catch {}
+      }
+    }
+  }
+  return {}
+}
+
+/**
  * Spawn a review subprocess via the wrapper script.
  * `messageCount`, `project`, and `trigger` are recorded in the observation
  * log (spec CM-RS-013); pass `log: false` to skip observation logging
@@ -633,7 +676,12 @@ export function runReviewSubprocess({ reviewMd, filePrefix = "review", title, cw
   dbg("REVIEW FILE WRITTEN", reviewFile)
 
   // @spec CM-RS-008, CM-RS-009, CM-RS-010
-  const args = [reviewMd, "--agent", "autolearn-reviewer", "--title", title]
+  // The review markdown is passed by REFERENCE (env AUTOLEARN_REVIEW_FILE),
+  // never on the command line: Windows caps a spawned process's argv at
+  // ~32 KB, so embedding a large conversation slice raised ENAMETOOLONG
+  // (uv_spawn) and killed the spawn (observed 2026-09-22, a 44 KB review).
+  // The wrapper attaches the file to `opencode run` instead of inlining it.
+  const args = []
   // Windows cannot exec a #!/bin/sh wrapper directly. Prepend a POSIX shell
   // (override via AUTOLEARN_BASH_BIN, else "bash" resolved from PATH) on
   // win32; POSIX keeps the shebang behaviour unchanged.
@@ -643,7 +691,13 @@ export function runReviewSubprocess({ reviewMd, filePrefix = "review", title, cw
   const wrapperCmd = shell ? [shell, WRAPPER_SCRIPT, ...args] : [WRAPPER_SCRIPT, ...args]
   spawnDetached(wrapperCmd, {
     cwd: cwd || process.cwd(),
-    env: { ...process.env, AUTOLEARN_REVIEWER: "1", ...(env || {}) },
+    env: {
+      ...process.env,
+      AUTOLEARN_REVIEWER: "1",
+      AUTOLEARN_REVIEW_FILE: reviewFile,
+      AUTOLEARN_REVIEW_TITLE: title || "autolearn review",
+      ...(env || {}),
+    },
   })
 
   // @spec CM-RS-013

@@ -123,10 +123,12 @@ export default {
           reviewMd,
           title: "autolearn review",
           cwd: directory,
-          // Pin the wrapper to the v2 binary so reviews run on the same
-          // OpenCode version that spawned them (v2 has no `session delete`
-          // CLI; the wrapper uses the HTTP API for opencode2).
-          env: { AUTOLEARN_OPENCODE_BIN: "opencode2" },
+          // Prefer the v2 binary when it exists, so reviews run on the same
+          // OpenCode that spawned them. harnessBinEnv() falls back to a
+          // binary that is actually installed (opencode, then pi) instead of
+          // pinning a missing one: a machine without opencode2 previously
+          // made every v2-spawned review a silent no-op.
+          env: core.harnessBinEnv("opencode2"),
           messageCount: captured.length,
           project: projectName(),
           trigger,

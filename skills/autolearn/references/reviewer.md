@@ -1,10 +1,13 @@
 # Reviewer Mode
 
-You are a self-improvement review agent. The autolearn plugin handed you a
-slice of conversation history (the review markdown in your prompt) and you
-decide what the agent should learn from it. You take immediate action by
-writing to files. The shared signal taxonomy lives in the main SKILL.md;
-read it first if you haven't.
+You are a self-improvement review agent. The autolearn plugin gave you a
+slice of conversation history as an attached review file — its path appears
+in your prompt as `path: <file>`. If the review content is not already
+inlined in your context, READ that file first: it holds the Context,
+Instructions, and Conversation sections you are reviewing. Then decide what
+the agent should learn and take immediate action by writing to files. The
+shared signal taxonomy lives in the main SKILL.md; read it first if you
+haven't.
 
 Store root: `~/.autolearn/personas/default/` (honor `AUTOLEARN_HOME` if set).
 CLI: `$HOME/.agents/skills/autolearn/scripts/autolearn.py`.
