@@ -224,8 +224,8 @@ const WRAPPER_CONTENT = `#!/bin/sh
 # then pushes the updated store via sync (if configured).
 # Works with OpenCode v1 (opencode) and v2 beta (opencode2).
 # Args: none required. The review file path arrives via AUTOLEARN_REVIEW_FILE
-# and is attached to the run with --file; a legacy caller that still passes the
-# review markdown CONTENT as $1 is supported (spilled to a temp file).
+# and is named in the prompt (the reviewer reads it); a legacy caller that still
+# passes the review markdown CONTENT as $1 is supported (spilled to a temp file).
 #
 # Wrapper-side throttle (defense in depth): plugin instances already in
 # memory predate the in-plugin throttle and keep calling this script, so
@@ -317,7 +317,12 @@ if [ "\$(basename "\$OC")" = "pi" ]; then
 fi
 OUT=\$(mktemp "\${TMPDIR:-/tmp}/alreview.XXXXXX")
 REVIEW_TITLE="\${AUTOLEARN_REVIEW_TITLE:-autolearn review}"
-"\$OC" run --format json --agent autolearn-reviewer --title "\$REVIEW_TITLE" --file "\$REVIEW_FILE" "The autolearn session review is attached as a file (path: \$REVIEW_FILE). Load the autolearn skill and follow references/reviewer.md to act on it; if the review content is not shown inline, read that file." > "\$OUT" 2>/dev/null
+# Design B: pass the review FILE PATH in the prompt and let the reviewer read it
+# - no --file attachment. Attachments proved fragile (2026-09-22): --file is an
+# array option that swallows the message when it precedes it, and a ~70 KB
+# attachment made opencode boot and load config WITHOUT ever invoking the model.
+# A path in the message keeps argv tiny and is size-independent.
+"\$OC" run --format json "The autolearn session review is the file at \$REVIEW_FILE - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it." --agent autolearn-reviewer --title "\$REVIEW_TITLE" > "\$OUT" 2>/dev/null
 # BRE backslashes below are DOUBLED (\\\\, \\1) because this script lives
 # inside a JS template literal — single backslashes get eaten by the escape
 # evaluation (\\( -> ( , \\1 -> 0x01 control char under Bun) and the sed
