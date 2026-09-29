@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-autolearn installer (multi-harness: OpenCode v1, OpenCode v2, pi)
+# agent-autolearn installer (multi-harness: OpenCode v1, OpenCode v2, pi, Cursor)
 #
 # Usage:
 #   bash install.sh                    # run from cloned repo
@@ -11,6 +11,8 @@
 # Installs for every harness detected on the machine:
 #   - OpenCode v1/v2: plugins + opencode.json patch
 #   - pi:             extension + shared core in ~/.pi/agent/extensions/
+#   - Cursor:         adapter + shared core in ~/.cursor/, always-applied
+#                     observer rule; reviews are transcript-driven (no hooks)
 # The skills + store (~/.autolearn) are shared by all harnesses.
 
 set -euo pipefail
@@ -25,6 +27,7 @@ fi
 
 PLUGIN_DIR="$HOME/.config/opencode/plugins"
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
+CURSOR_DIR="$HOME/.cursor"
 SKILLS_DIR="$HOME/.agents/skills"
 OPENCODE_JSON="$HOME/.config/opencode/opencode.json"
 
@@ -35,7 +38,7 @@ echo ""
 # 1. Copy plugins/extensions. The core uses a .mjs extension so OpenCode v2's
 # plugins/ auto-discovery and pi's extensions/ discovery do not try to load
 # it as a plugin (both only discover .js/.ts files).
-echo "[1/5] Installing plugins/extensions..."
+echo "[1/6] Installing plugins/extensions..."
 mkdir -p "$PLUGIN_DIR"
 cp "$REPO_DIR/plugin/autolearn.js" "$PLUGIN_DIR/"
 cp "$REPO_DIR/plugin/autolearn-v2.js" "$PLUGIN_DIR/"
@@ -52,18 +55,43 @@ mkdir -p "$PI_EXT_DIR"
 cp "$REPO_DIR/plugin/autolearn-pi.ts" "$PI_EXT_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$PI_EXT_DIR/"
 
-# 2. Install the single consolidated skill, replacing the three legacy skill
+# 2. Cursor adapter. Cursor has no in-process plugin runtime, so the adapter
+# is transcript-driven: a local scan reads Cursor's transcript files and
+# spawns a one-shot headless reviewer. The module + shared core land in
+# ~/.cursor/; --install writes the always-applied observer rule and
+# --schedule registers (or prints) the recurring scan job.
+echo "[2/6] Installing Cursor adapter..."
+mkdir -p "$CURSOR_DIR"
+cp "$REPO_DIR/plugin/autolearn-cursor.mjs" "$CURSOR_DIR/"
+cp "$REPO_DIR/plugin/autolearn-core.mjs" "$CURSOR_DIR/"
+
+JS_RUNTIME=""
+if command -v node &>/dev/null; then
+  JS_RUNTIME="node"
+elif command -v bun &>/dev/null; then
+  JS_RUNTIME="bun"
+fi
+if [[ -n "$JS_RUNTIME" ]]; then
+  "$JS_RUNTIME" "$CURSOR_DIR/autolearn-cursor.mjs" --install || true
+  "$JS_RUNTIME" "$CURSOR_DIR/autolearn-cursor.mjs" --schedule || true
+else
+  echo "  Warning: node/bun not found. Run manually:"
+  echo "    node ~/.cursor/autolearn-cursor.mjs --install"
+  echo "    node ~/.cursor/autolearn-cursor.mjs --schedule"
+fi
+
+# 3. Install the single consolidated skill, replacing the three legacy skill
 # dirs (autolearn-reviewer, autolearn-curator, self-improving-agent). Only
 # removes the legacy dirs this installer owns; never touches agent-created
 # skills (e.g. autolearn-audit) or user-installed skills.
-echo "[2/5] Installing skills..."
+echo "[3/6] Installing skills..."
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/autolearn-reviewer" "$SKILLS_DIR/autolearn-curator" "$SKILLS_DIR/self-improving-agent"
 rm -rf "$SKILLS_DIR/autolearn"
 cp -r "$REPO_DIR/skills/autolearn" "$SKILLS_DIR/"
 
-# 3. Patch opencode.json
-echo "[3/5] Configuring opencode.json..."
+# 4. Patch opencode.json
+echo "[4/6] Configuring opencode.json..."
 mkdir -p "$(dirname "$OPENCODE_JSON")"
 
 python3 -c "
@@ -169,8 +197,8 @@ else:
     print('  Already configured (' + path + ')')
 " 2>&1
 
-# 4. Initialize + bootstrap the registry (migrates legacy memory.md if present)
-echo "[4/5] Initializing autolearn store..."
+# 5. Initialize + bootstrap the registry (migrates legacy memory.md if present)
+echo "[5/6] Initializing autolearn store..."
 CLI="$SKILLS_DIR/autolearn/scripts/autolearn.py"
 if [[ ! -f "$CLI" ]]; then
   CLI="$SKILLS_DIR/autolearn-reviewer/scripts/autolearn.py"
@@ -183,14 +211,17 @@ else
     echo "  Warning: uv not found. Run manually: uv run $CLI init"
 fi
 
-# 5. Verify
-echo "[5/5] Verifying..."
+# 6. Verify
+echo "[6/6] Verifying..."
 OK=true
 [[ -f "$PLUGIN_DIR/autolearn.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn.js"; OK=false; }
 [[ -f "$PLUGIN_DIR/autolearn-v2.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-v2.js"; OK=false; }
 [[ -f "$PLUGIN_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$PI_EXT_DIR/autolearn-pi.ts" ]] || { echo "  MISSING: $PI_EXT_DIR/autolearn-pi.ts"; OK=false; }
 [[ -f "$PI_EXT_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PI_EXT_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$CURSOR_DIR/autolearn-cursor.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-cursor.mjs"; OK=false; }
+[[ -f "$CURSOR_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$CURSOR_DIR/rules/autolearn-observer.mdc" ]] || { echo "  MISSING: $CURSOR_DIR/rules/autolearn-observer.mdc"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/SKILL.md" ]] || { echo "  MISSING: skills/autolearn"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/scripts/autolearn.py" ]] || { echo "  MISSING: skills/autolearn/scripts/autolearn.py"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/scripts/improve.py" ]] || { echo "  MISSING: skills/autolearn/scripts/improve.py"; OK=false; }
@@ -199,7 +230,7 @@ OK=true
 
 echo ""
 if $OK; then
-    echo "Done! Autolearn will activate on your next OpenCode or pi session."
+    echo "Done! Autolearn will activate on your next OpenCode, pi, or Cursor session."
 else
     echo "Some files are missing — check the errors above."
     exit 1

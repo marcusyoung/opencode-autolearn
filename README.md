@@ -1,6 +1,6 @@
 # agent-autolearn
 
-Self-improvement engine for coding agents. One enforced methodology, multiple harnesses: works with **OpenCode v1 (`opencode`)**, **OpenCode v2 beta (`opencode2`)**, and **pi**, installed side by side. Learns from your conversations, captures corrections and preferences, and escalates behavioral rules so your coding agent improves over time.
+Self-improvement engine for coding agents. One enforced methodology, multiple harnesses: works with **OpenCode v1 (`opencode`)**, **OpenCode v2 beta (`opencode2`)**, **pi**, and **Cursor**, installed side by side. Learns from your conversations, captures corrections and preferences, and escalates behavioral rules so your coding agent improves over time.
 
 <p align="center">
   <a href="https://www.linkedin.com/feed/update/urn:li:activity:7481434645415477248/">
@@ -15,6 +15,7 @@ Self-improvement engine for coding agents. One enforced methodology, multiple ha
 | OpenCode v1 | `plugin/autolearn.js` | `~/.config/opencode/plugins/` | `instructions` entry in `opencode.json` | `opencode run --agent autolearn-reviewer` |
 | OpenCode v2 (beta) | `plugin/autolearn-v2.js` | `~/.config/opencode/plugins/` | `instructions` entry in `opencode.json` | `opencode2 run` + HTTP session delete |
 | pi | `plugin/autolearn-pi.ts` | `~/.pi/agent/extensions/` | system-prompt section (diff-patched by pi) | `pi -p --no-session -na` (one-shot, ephemeral) |
+| Cursor | `plugin/autolearn-cursor.mjs` | `~/.cursor/` | always-applied rule (`~/.cursor/rules/`) | `agent -p --force` (transcript-driven local scan) |
 
 All adapters import one shared core (`plugin/autolearn-core.mjs`) that owns the methodology, so behavior is identical everywhere.
 
@@ -27,7 +28,7 @@ All adapters import one shared core (`plugin/autolearn-core.mjs`) that owns the 
 
 ```text
 Any supported harness session
-  └─ autolearn adapter (v1 / v2 / pi)
+  └─ autolearn adapter (v1 / v2 / pi / cursor)
        ├─ every N user messages ──→ spawn review subprocess
        ├─ session quiet ──────────→ spawn review subprocess
        └─ session exit ───────────→ flush buffer as exit review
@@ -65,13 +66,14 @@ bash agent-autolearn/install.sh
 ### What the installer does
 
 1. Copies `plugin/autolearn.js` (v1), `plugin/autolearn-v2.js` (v2), and `plugin/autolearn-core.mjs` (shared) to `~/.config/opencode/plugins/`, plus `plugin/autolearn-pi.ts` and the shared core to `~/.pi/agent/extensions/`
-2. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
-3. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
-4. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
+2. Copies `plugin/autolearn-cursor.mjs` and the shared core to `~/.cursor/`, writes the always-applied observer rule (`~/.cursor/rules/autolearn-observer.mdc`), and registers (or prints) the recurring transcript scan job
+3. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
+4. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
+5. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
 
 ### Verify
 
-After installing, restart OpenCode / pi to load the adapter. With `opencode2` you can hot-reload in place — `opencode2 service restart` reloads plugins/config without quitting open sessions (note: running it from inside an agent session cancels that in-flight shell command, but the session survives and reconnects). You can confirm the store with:
+After installing, restart OpenCode / pi to load the adapter. With `opencode2` you can hot-reload in place — `opencode2 service restart` reloads plugins/config without quitting open sessions (note: running it from inside an agent session cancels that in-flight shell command, but the session survives and reconnects). Cursor loads no adapter — its observer rule and scan job are active immediately; trigger reviews on demand with `node ~/.cursor/autolearn-cursor.mjs --scan`. You can confirm the store with:
 
 ```bash
 uv run ~/.agents/skills/autolearn/scripts/autolearn.py memory list
@@ -113,6 +115,17 @@ If you prefer to edit `~/.config/opencode/opencode.json` yourself, here is what 
 - **Reviewer recursion guards**: `AUTOLEARN_REVIEWER=1` env var, agent-name and title matching, and buffer depth guard.
 - **Skill lifecycle**: curator transitions (stale at 30 days, archived at 90, pinned exempt); archives are never deleted.
 
+## Cursor adapter notes
+
+- **No plugin runtime, no hooks.** Cursor has no in-process plugin API, so the adapter does not hook Cursor events. Cursor's only role is writing transcript files; a local scan reads them and spawns the reviewer.
+- **Observer trigger** is an always-applied rule at `~/.cursor/rules/autolearn-observer.mdc` (`alwaysApply: true`); the in-session observer protocol itself is skill-driven.
+- **Review trigger** is a transcript-driven scan. `autolearn-cursor.mjs --scan` reads each conversation transcript at `~/.cursor/projects/*/agent-transcripts/<conversation_id>/<conversation_id>.jsonl` (nested `subagents/` are ignored), counts user messages per conversation, and spawns `agent -p --force` once `review_threshold` user messages have accrued. The absolute count is recomputed each scan and the reviewed slice advances only on an admitted spawn, so repeated scans are idempotent.
+- **Scheduling** is a resident watcher: `--watch` runs a single long-lived process that scans on an internal timer (default 5 min). `--schedule` installs a hidden Startup shortcut (`AutoLearnCursorScan.lnk` → `powershell -WindowStyle Hidden -File ~/.cursor/autolearn-cursor-watch.ps1`) that starts the watcher at logon — the same resident-daemon pattern as the auto-push utility. No Task Scheduler console process, no VBS. Cursor's own Automations run cloud agents and cannot reach the local store, so they are not used.
+- **No console flash on Windows.** The watcher runs inside a hidden console, and every reviewer it spawns inherits it, so nothing flashes. (A manual `--scan` run from a visible shell may briefly show the reviewer's console.)
+- **Cadence + throttle are shared** with the other harnesses: `review_threshold`, `min_interval_ms`, `max_reviews_per_day`, and identical-conversation dedupe all come from `autolearn-core.mjs`, so Cursor reviews compete for the same global budget.
+- **Idle/exit reviews** have no batch equivalent and are not produced for Cursor; threshold reviews only.
+- **Transcripts must be enabled** in Cursor; a missing transcript or transcripts directory is a safe no-op.
+
 ## pi adapter notes
 
 - Memory injection uses pi's `before_agent_start` system-prompt **sections**: pi diffs sections against what the model already has, so the first turn appends one patch message and the provider cache survives. No harness config file is patched.
@@ -145,7 +158,7 @@ Behavioral differences worth knowing:
 - **[uv](https://docs.astral.sh/uv/)** — runs the Python CLI scripts with inline dependency resolution (no venv needed)
 - **[Bun](https://bun.sh)** — runtime for the v1 plugin (bundled with OpenCode); the v2 plugin uses only Node-compatible APIs
 - **Python ≥3.11** — for `autolearn.py` (dependencies resolved automatically via PEP 723 metadata)
-- **OpenCode v1 (`opencode`) and/or v2 (`opencode2`), and/or [pi](https://github.com/earendil-works/pi-coding-agent)** — any combination; each loads its matching adapter
+- **OpenCode v1 (`opencode`) and/or v2 (`opencode2`), and/or [pi](https://github.com/earendil-works/pi-coding-agent), and/or Cursor** — any combination; each loads its matching adapter (Cursor is transcript-driven and needs no plugin runtime, only the `agent` CLI)
 
 ## Configuration
 
