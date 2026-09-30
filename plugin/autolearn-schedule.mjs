@@ -26,6 +26,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  unlinkSync,
   writeFileSync,
 } from "fs"
 import { homedir } from "os"
@@ -152,36 +153,52 @@ export function resolveCuratorArgv() {
   return null
 }
 
-/** Tiny PowerShell trampoline Task Scheduler can quote reliably. */
+/**
+ * Write a .cmd trampoline and register it under Task Scheduler via
+ * hide-run-wait.vbs as the *root* process. PowerShell/node as the schtasks
+ * action still allocate a visible console host even with -WindowStyle Hidden;
+ * wscript (Windows subsystem) + WindowStyle 0 does not.
+ */
 function writeJobLauncher(job, curatorBin = "") {
   mkdirSync(SCHEDULE_DIR, { recursive: true })
-  const psPath = join(SCHEDULE_DIR, `autolearn-job-${job}.ps1`)
-  const mod = installedModulePath().replace(/'/g, "''")
-  const node = process.execPath.replace(/'/g, "''")
-  const curatorEnv = job === "curator" && curatorBin
-    ? [`$env:AUTOLEARN_CURATOR_BIN = '${curatorBin.replace(/'/g, "''")}'`]
-    : []
-  writeFileSync(
-    psPath,
-    [
-      "$ErrorActionPreference = 'Stop'",
-      ...curatorEnv,
-      `& '${node}' '${mod}' --run ${job}`,
-      "exit $LASTEXITCODE",
-      "",
-    ].join("\r\n"),
-  )
-  return psPath
+  const cmdPath = join(SCHEDULE_DIR, `autolearn-job-${job}.cmd`)
+  const mod = installedModulePath()
+  const node = process.execPath
+  const lines = ["@echo off"]
+  if (job === "curator" && curatorBin) {
+    lines.push(`set "AUTOLEARN_CURATOR_BIN=${curatorBin}"`)
+  }
+  // Quote node + module; %* unused. Propagate exit code to Task Scheduler.
+  lines.push(`"${node}" "${mod}" --run ${job}`)
+  lines.push("exit /b %ERRORLEVEL%")
+  lines.push("")
+  writeFileSync(cmdPath, lines.join("\r\n"))
+  // Drop the old PowerShell trampoline if present from earlier installs.
+  try { unlinkSync(join(SCHEDULE_DIR, `autolearn-job-${job}.ps1`)) } catch {}
+  return cmdPath
 }
 
-function schtasksCreate(taskName, time, psPath) {
-  const tr = `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "${psPath}"`
+function schtasksCreate(taskName, time, cmdPath) {
+  ensureHideLaunchers()
+  // Register via PowerShell so we can clear the schtasks.exe defaults that
+  // block/stop runs on battery (ThinkPads otherwise silently skip the daily
+  // trigger). Keep wscript as the Exec root — no console host.
+  const arg = `//Nologo "${HIDE_RUN_WAIT_VBS}" "${cmdPath}"`
+  const ps = [
+    "$ErrorActionPreference = 'Stop'",
+    `$action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument '${arg.replace(/'/g, "''")}'`,
+    `$trigger = New-ScheduledTaskTrigger -Daily -At '${time}'`,
+    "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 4)",
+    `Unregister-ScheduledTask -TaskName '${taskName.replace(/'/g, "''")}' -Confirm:$false -ErrorAction SilentlyContinue`,
+    `Register-ScheduledTask -TaskName '${taskName.replace(/'/g, "''")}' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null`,
+    "Write-Output OK",
+  ].join("; ")
   const r = spawnSync(
-    "schtasks",
-    ["/Create", "/TN", taskName, "/SC", "DAILY", "/ST", time, "/F", "/RL", "LIMITED", "/TR", tr],
+    "powershell",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
     { encoding: "utf8" },
   )
-  return { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "" }
+  return { ok: r.status === 0 && /OK/.test(r.stdout || ""), stdout: r.stdout || "", stderr: r.stderr || "" }
 }
 
 function schtasksDelete(taskName) {
@@ -241,10 +258,10 @@ export function installSchedule() {
   }
 
   ensureInstalledCopy()
-  const curatorPs = writeJobLauncher("curator", curator[0])
-  const topicsPs = writeJobLauncher("topics")
-  const c = schtasksCreate(CURATOR_TASK, CURATOR_TIME, curatorPs)
-  const t = schtasksCreate(TOPICS_TASK, TOPICS_TIME, topicsPs)
+  const curatorCmd = writeJobLauncher("curator", curator[0])
+  const topicsCmd = writeJobLauncher("topics")
+  const c = schtasksCreate(CURATOR_TASK, CURATOR_TIME, curatorCmd)
+  const t = schtasksCreate(TOPICS_TASK, TOPICS_TIME, topicsCmd)
   return {
     ok: c.ok && t.ok,
     tasks: [CURATOR_TASK, TOPICS_TASK],

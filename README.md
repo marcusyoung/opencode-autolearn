@@ -299,9 +299,10 @@ node ~/.autolearn/bin/autolearn-schedule.mjs --run topics
 node ~/.autolearn/bin/autolearn-schedule.mjs --run curator
 ```
 
-On Windows the tasks launch through a hidden wait-capable VBS wrapper (no console flash). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`); override with `AUTOLEARN_CURATOR_BIN`.
+On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `autolearn-job-*.cmd` (no console host at the root; runs allowed on battery). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`) and pinned by absolute path in the job launcher; override with `AUTOLEARN_CURATOR_BIN`.
 
 `curator_interval_days` in `~/.autolearn/personas/default/config.yaml` is **not** read by `curator run` and does not throttle the OS schedule — wall-clock frequency is controlled only by the Task Scheduler / crontab entries above.
+
 ## Troubleshooting
 
 **`opencode2` logs a plugin warning for autolearn.js.** Under v2, a warning like `failed to load plugin .../plugins/autolearn.js ... Expected object at ["default"]` appears once per service start. This is expected: v2 normalizes the v1 `plugin` key and cannot load v1-style plugins, so it skips the v1 shell and loads `./plugins/autolearn-v2.js` from the `plugins` key instead. Verify with `opencode2 plugin list` — the `autolearn-v2.js` entry must not be `(failed)`. Once you retire v1, remove the `plugin` entry from `opencode.json` to silence the warning.
@@ -354,6 +355,7 @@ rm -f ~/.cursor/autolearn-cursor.mjs ~/.cursor/autolearn-core.mjs \
 # Maintenance schedule (curator + topics Task Scheduler / crontab entries)
 node ~/.autolearn/bin/autolearn-schedule.mjs --remove
 rm -f ~/.autolearn/bin/autolearn-schedule.mjs ~/.autolearn/bin/autolearn-core.mjs \
+      ~/.autolearn/bin/autolearn-job-curator.cmd ~/.autolearn/bin/autolearn-job-topics.cmd \
       ~/.autolearn/bin/autolearn-job-curator.ps1 ~/.autolearn/bin/autolearn-job-topics.ps1 \
       ~/.local/bin/hide-run-wait.vbs
 
