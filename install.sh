@@ -38,7 +38,7 @@ echo ""
 # 1. Copy plugins/extensions. The core uses a .mjs extension so OpenCode v2's
 # plugins/ auto-discovery and pi's extensions/ discovery do not try to load
 # it as a plugin (both only discover .js/.ts files).
-echo "[1/6] Installing plugins/extensions..."
+echo "[1/7] Installing plugins/extensions..."
 mkdir -p "$PLUGIN_DIR"
 cp "$REPO_DIR/plugin/autolearn.js" "$PLUGIN_DIR/"
 cp "$REPO_DIR/plugin/autolearn-v2.js" "$PLUGIN_DIR/"
@@ -60,7 +60,7 @@ cp "$REPO_DIR/plugin/autolearn-core.mjs" "$PI_EXT_DIR/"
 # spawns a one-shot headless reviewer. The module + shared core land in
 # ~/.cursor/; --install writes the always-applied observer rule and
 # --schedule registers (or prints) the recurring scan job.
-echo "[2/6] Installing Cursor adapter..."
+echo "[2/7] Installing Cursor adapter..."
 mkdir -p "$CURSOR_DIR"
 cp "$REPO_DIR/plugin/autolearn-cursor.mjs" "$CURSOR_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$CURSOR_DIR/"
@@ -86,18 +86,33 @@ else
   echo "    node ~/.cursor/autolearn-cursor.mjs --schedule"
 fi
 
-# 3. Install the single consolidated skill, replacing the three legacy skill
+# 2b. Harness-neutral maintenance schedule (curator + topics scan).
+# Lives under ~/.autolearn/bin/; Windows registers Task Scheduler jobs, POSIX
+# prints crontab lines. Disable any OpenChamber autolearn-curator first.
+SCHEDULE_DIR="$HOME/.autolearn/bin"
+echo "[3/7] Installing maintenance schedule..."
+mkdir -p "$SCHEDULE_DIR"
+cp "$REPO_DIR/plugin/autolearn-schedule.mjs" "$SCHEDULE_DIR/"
+cp "$REPO_DIR/plugin/autolearn-core.mjs" "$SCHEDULE_DIR/"
+if [[ -n "$JS_RUNTIME" ]]; then
+  "$JS_RUNTIME" "$SCHEDULE_DIR/autolearn-schedule.mjs" --install || true
+else
+  echo "  Warning: node/bun not found. Run manually:"
+  echo "    node ~/.autolearn/bin/autolearn-schedule.mjs --install"
+fi
+
+# 4. Install the single consolidated skill, replacing the three legacy skill
 # dirs (autolearn-reviewer, autolearn-curator, self-improving-agent). Only
 # removes the legacy dirs this installer owns; never touches agent-created
 # skills (e.g. autolearn-audit) or user-installed skills.
-echo "[3/6] Installing skills..."
+echo "[4/7] Installing skills..."
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/autolearn-reviewer" "$SKILLS_DIR/autolearn-curator" "$SKILLS_DIR/self-improving-agent"
 rm -rf "$SKILLS_DIR/autolearn"
 cp -r "$REPO_DIR/skills/autolearn" "$SKILLS_DIR/"
 
-# 4. Patch opencode.json
-echo "[4/6] Configuring opencode.json..."
+# 5. Patch opencode.json
+echo "[5/7] Configuring opencode.json..."
 mkdir -p "$(dirname "$OPENCODE_JSON")"
 
 python3 -c "
@@ -203,8 +218,8 @@ else:
     print('  Already configured (' + path + ')')
 " 2>&1
 
-# 5. Initialize + bootstrap the registry (migrates legacy memory.md if present)
-echo "[5/6] Initializing autolearn store..."
+# 6. Initialize + bootstrap the registry (migrates legacy memory.md if present)
+echo "[6/7] Initializing autolearn store..."
 CLI="$SKILLS_DIR/autolearn/scripts/autolearn.py"
 if [[ ! -f "$CLI" ]]; then
   CLI="$SKILLS_DIR/autolearn-reviewer/scripts/autolearn.py"
@@ -217,8 +232,8 @@ else
     echo "  Warning: uv not found. Run manually: uv run $CLI init"
 fi
 
-# 6. Verify
-echo "[6/6] Verifying..."
+# 7. Verify
+echo "[7/7] Verifying..."
 OK=true
 [[ -f "$PLUGIN_DIR/autolearn.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn.js"; OK=false; }
 [[ -f "$PLUGIN_DIR/autolearn-v2.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-v2.js"; OK=false; }
@@ -227,6 +242,8 @@ OK=true
 [[ -f "$PI_EXT_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PI_EXT_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-cursor.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-cursor.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$SCHEDULE_DIR/autolearn-schedule.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-schedule.mjs"; OK=false; }
+[[ -f "$SCHEDULE_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-core.mjs"; OK=false; }
 if $CURSOR_DEFERRED; then
     echo "  DEFERRED: $CURSOR_DIR/rules/autolearn-observer.mdc (no node/bun — run autolearn-cursor.mjs --install)"
 else
