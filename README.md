@@ -168,7 +168,7 @@ Config lives at `~/.autolearn/personas/default/config.yaml`:
 review_threshold: 5           # user messages (exchanges) between reviews
 session_review_on_idle: true  # spawn review on session idle
 max_conversation_buffer: 50   # max messages in buffer
-curator_interval_days: 7      # how often to run curator
+curator_interval_days: 7      # legacy/config placeholder (not read by curator run; wall-clock cadence is the OS schedule)
 stale_after_days: 30          # days before skill → stale
 archive_after_days: 90        # days before skill → archived
 escalation_threshold: 3       # reinforcement count before curator suggests promotion to AGENTS.md
@@ -299,9 +299,9 @@ node ~/.autolearn/bin/autolearn-schedule.mjs --run topics
 node ~/.autolearn/bin/autolearn-schedule.mjs --run curator
 ```
 
-On Windows the tasks launch through a hidden wait-capable VBS wrapper (no console flash). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot.
+On Windows the tasks launch through a hidden wait-capable VBS wrapper (no console flash). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`); override with `AUTOLEARN_CURATOR_BIN`.
 
-`curator_interval_days` in `~/.autolearn/personas/default/config.yaml` is the skill-lifecycle interval used inside `curator run`, not the wall-clock schedule above.
+`curator_interval_days` in `~/.autolearn/personas/default/config.yaml` is **not** read by `curator run` and does not throttle the OS schedule — wall-clock frequency is controlled only by the Task Scheduler / crontab entries above.
 ## Troubleshooting
 
 **`opencode2` logs a plugin warning for autolearn.js.** Under v2, a warning like `failed to load plugin .../plugins/autolearn.js ... Expected object at ["default"]` appears once per service start. This is expected: v2 normalizes the v1 `plugin` key and cannot load v1-style plugins, so it skips the v1 shell and loads `./plugins/autolearn-v2.js` from the `plugins` key instead. Verify with `opencode2 plugin list` — the `autolearn-v2.js` entry must not be `(failed)`. Once you retire v1, remove the `plugin` entry from `opencode.json` to silence the warning.
@@ -354,7 +354,8 @@ rm -f ~/.cursor/autolearn-cursor.mjs ~/.cursor/autolearn-core.mjs \
 # Maintenance schedule (curator + topics Task Scheduler / crontab entries)
 node ~/.autolearn/bin/autolearn-schedule.mjs --remove
 rm -f ~/.autolearn/bin/autolearn-schedule.mjs ~/.autolearn/bin/autolearn-core.mjs \
-      ~/.autolearn/bin/autolearn-job-curator.ps1 ~/.autolearn/bin/autolearn-job-topics.ps1
+      ~/.autolearn/bin/autolearn-job-curator.ps1 ~/.autolearn/bin/autolearn-job-topics.ps1 \
+      ~/.local/bin/hide-run-wait.vbs
 
 # Remove local data stores (optional — keeps your learned memory/skills)
 # rm -rf ~/.autolearn ~/.agent-improvement

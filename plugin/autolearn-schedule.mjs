@@ -8,7 +8,7 @@
  *   --run curator|topics                invoke one job (what schtasks / cron call)
  *
  * Jobs (Windows, local machine time):
- *   AutoLearnCurator      daily 13:00 — headless `agent -p` with curator.md
+ *   AutoLearnCurator      daily 13:00 — headless harness print/run with curator.md
  *   AutoLearnTopicsScan   daily 12:15 — `uv run … topics scan`
  *
  * Proposals scan is intentionally NOT scheduled: `curator run` (invoked by the
@@ -18,7 +18,8 @@
  * Task Scheduler process stays hidden and still waits for completion.
  *
  * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED (as core), plus:
- *   AUTOLEARN_CURSOR_AGENT  - curator binary (default "agent"; shared with Cursor)
+ *   AUTOLEARN_CURATOR_BIN   - explicit curator binary (agent|pi|opencode|opencode2)
+ *   AUTOLEARN_CURSOR_AGENT  - alias for AUTOLEARN_CURATOR_BIN (Cursor installs)
  */
 
 import {
@@ -28,7 +29,7 @@ import {
   writeFileSync,
 } from "fs"
 import { homedir } from "os"
-import { dirname, join, resolve } from "path"
+import { basename, dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
 import { spawnSync } from "child_process"
 import * as core from "./autolearn-core.mjs"
@@ -42,11 +43,10 @@ export const TOPICS_TASK = "AutoLearnTopicsScan"
 export const CURATOR_TIME = "13:00"
 export const TOPICS_TIME = "12:15"
 
-export const AGENT_BIN = process.env.AUTOLEARN_CURSOR_AGENT || "agent"
 export const CURATOR_PROMPT =
   "Load the autolearn skill and follow references/curator.md to run the curator."
 
-/** Like hide-uv.vbs but waits (third Run arg True) so schtasks sees real duration. */
+/** Like hide-uv.vbs but waits and propagates the child exit code. */
 export const HIDE_RUN_WAIT_VBS = join(
   process.env.USERPROFILE || homedir(),
   ".local",
@@ -54,12 +54,13 @@ export const HIDE_RUN_WAIT_VBS = join(
   "hide-run-wait.vbs",
 )
 export const HIDE_RUN_WAIT_VBS_CONTENT = `Set sh = CreateObject("WScript.Shell")
-Dim cmdline, i
+Dim cmdline, i, rc
 cmdline = ""
 For i = 0 To WScript.Arguments.Count - 1
     cmdline = cmdline & """" & WScript.Arguments(i) & """" & " "
 Next
-sh.Run Trim(cmdline), 0, True
+rc = sh.Run(Trim(cmdline), 0, True)
+WScript.Quit rc
 `
 
 function modulePath() {
@@ -100,6 +101,32 @@ function ensureInstalledCopy() {
   }
 }
 
+/**
+ * Resolve which harness runs the curator prompt.
+ * Preference: AUTOLEARN_CURATOR_BIN / AUTOLEARN_CURSOR_AGENT, else first of
+ * agent → pi → opencode2 → opencode found on PATH (via core.harnessBinEnv).
+ * Returns argv for spawn, or null if nothing compatible is installed.
+ */
+export function resolveCuratorArgv() {
+  const override = process.env.AUTOLEARN_CURATOR_BIN || process.env.AUTOLEARN_CURSOR_AGENT || ""
+  let bin = override.trim()
+  if (!bin) {
+    const env = core.harnessBinEnv("agent", ["pi", "opencode2", "opencode"])
+    bin = env.AUTOLEARN_HARNESS_BIN || ""
+  }
+  if (!bin) return null
+
+  const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+  if (base === "agent" || base === "cursor-agent") {
+    return [bin, "-p", "--force", CURATOR_PROMPT]
+  }
+  if (base === "pi") {
+    return [bin, "-p", "--no-session", "-na", CURATOR_PROMPT]
+  }
+  // OpenCode v1/v2: one-shot run with the curator prompt (no attached file).
+  return [bin, "run", CURATOR_PROMPT, "--title", "autolearn curator"]
+}
+
 /** Tiny PowerShell trampoline Task Scheduler can quote reliably. */
 function writeJobLauncher(job) {
   mkdirSync(SCHEDULE_DIR, { recursive: true })
@@ -129,13 +156,20 @@ function schtasksCreate(taskName, time, psPath) {
 }
 
 function schtasksDelete(taskName) {
-  spawnSync("schtasks", ["/Delete", "/TN", taskName, "/F"], { encoding: "utf8" })
+  const r = spawnSync("schtasks", ["/Delete", "/TN", taskName, "/F"], { encoding: "utf8" })
+  const out = `${r.stdout || ""}\n${r.stderr || ""}`
+  const missing = /ERROR:\s*The system cannot find|cannot find the file|does not exist/i.test(out)
+  return {
+    ok: r.status === 0 || missing,
+    missing,
+    stdout: r.stdout || "",
+    stderr: r.stderr || "",
+  }
 }
 
 export function crontabLines() {
   const mod = modulePath()
   const node = process.execPath
-  // topics 12:15, curator 13:00 — daily
   return [
     `15 12 * * * "${node}" "${mod}" --run topics >/dev/null 2>&1`,
     `0 13 * * * "${node}" "${mod}" --run curator >/dev/null 2>&1`,
@@ -150,12 +184,30 @@ export function crontabLines() {
 export function installSchedule() {
   ensureHideLaunchers()
   if (process.platform !== "win32") {
+    const curator = resolveCuratorArgv()
+    if (!curator) {
+      return {
+        ok: false,
+        crontab: crontabLines(),
+        stderr: "No curator harness found (agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN before installing crontab lines that run --run curator.",
+      }
+    }
     return {
       ok: true,
       crontab: crontabLines(),
       note: "Times assume a Europe/London (or UTC+0/+1) host matching the prior OpenChamber slot.",
+      curatorBin: curator[0],
     }
   }
+
+  const curator = resolveCuratorArgv()
+  if (!curator) {
+    return {
+      ok: false,
+      stderr: "No curator harness found (agent/pi/opencode2/opencode). Install one or set AUTOLEARN_CURATOR_BIN, then re-run --install.",
+    }
+  }
+
   ensureInstalledCopy()
   const curatorPs = writeJobLauncher("curator")
   const topicsPs = writeJobLauncher("topics")
@@ -164,6 +216,7 @@ export function installSchedule() {
   return {
     ok: c.ok && t.ok,
     tasks: [CURATOR_TASK, TOPICS_TASK],
+    curatorBin: curator[0],
     stderr: [c.stderr, t.stderr, c.stdout, t.stdout].filter(Boolean).join("\n"),
   }
 }
@@ -172,9 +225,14 @@ export function removeSchedule() {
   if (process.platform !== "win32") {
     return { ok: true, note: "Remove the autolearn crontab lines manually." }
   }
-  schtasksDelete(CURATOR_TASK)
-  schtasksDelete(TOPICS_TASK)
-  return { ok: true, tasks: [CURATOR_TASK, TOPICS_TASK] }
+  const c = schtasksDelete(CURATOR_TASK)
+  const t = schtasksDelete(TOPICS_TASK)
+  const ok = c.ok && t.ok
+  return {
+    ok,
+    tasks: [CURATOR_TASK, TOPICS_TASK],
+    stderr: ok ? "" : [c.stderr, t.stderr, c.stdout, t.stdout].filter(Boolean).join("\n"),
+  }
 }
 
 /**
@@ -191,7 +249,11 @@ export function runJob(job) {
 
   let argv
   if (job === "curator") {
-    argv = [AGENT_BIN, "-p", "--force", CURATOR_PROMPT]
+    argv = resolveCuratorArgv()
+    if (!argv) {
+      console.error("No curator harness found (agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN.")
+      return 1
+    }
   } else if (job === "topics") {
     argv = ["uv", "run", core.AUTOLEARN_CLI, "topics", "scan"]
   } else {
@@ -230,6 +292,7 @@ function main(argv) {
     const r = removeSchedule()
     console.log(r.ok ? `Removed schedule tasks: ${(r.tasks || []).join(", ") || "ok"}` : `Remove failed: ${r.stderr || r.note || "unknown"}`)
     if (r.note) console.log(r.note)
+    if (!r.ok) process.exit(1)
     return
   }
 
@@ -238,6 +301,11 @@ function main(argv) {
     if (r.crontab) {
       console.log("Add to crontab (Europe/London-aligned local times):\n" + r.crontab)
       if (r.note) console.log(r.note)
+      if (r.curatorBin) console.log(`Curator harness: ${r.curatorBin}`)
+      if (!r.ok) {
+        console.error(r.stderr || "Schedule install failed")
+        process.exit(1)
+      }
       return
     }
     console.log(
@@ -245,12 +313,14 @@ function main(argv) {
         ? `Installed Task Scheduler jobs: ${(r.tasks || []).join(", ")} (daily ${TOPICS_TIME} topics, ${CURATOR_TIME} curator, local time)`
         : `Schedule install failed: ${r.stderr || "unknown"}`,
     )
+    if (r.ok && r.curatorBin) console.log(`Curator harness: ${r.curatorBin}`)
     console.log(
       "Before enabling these, disable or delete any OpenChamber/OpenCode autolearn-curator schedule so the curator never runs twice.",
     )
     console.log(
       "Proposals scan is not scheduled separately — curator run already embeds proposals.scan → verify → promote.",
     )
+    if (!r.ok) process.exit(1)
     return
   }
 
