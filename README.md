@@ -280,7 +280,7 @@ Autolearn registers two local OS jobs (harness-neutral — not OpenCode/Cursor-s
 
 | Job | When (local time) | What runs |
 |-----|-------------------|-----------|
-| `AutoLearnCurator` | Daily 13:00 | `agent -p --force` with the curator.md prompt |
+| `AutoLearnCurator` | Daily 13:00 | Auto-detected `agent`, `pi`, `opencode2`, or `opencode` one-shot curator prompt |
 | `AutoLearnTopicsScan` | Daily 12:15 | `uv run …/autolearn.py topics scan` |
 
 **Proposals scan is not a separate job.** `curator run` (step 1 of the curator agent) already embeds `proposals.scan` → verify → promote, so a second daily proposals task would only duplicate work.

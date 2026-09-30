@@ -63,6 +63,26 @@ rc = sh.Run(Trim(cmdline), 0, True)
 WScript.Quit rc
 `
 
+function resolveExecutable(bin) {
+  const ext = process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const names = ext.includes("") && ext.length > 1 && !/\.(exe|cmd|bat)$/i.test(bin)
+    ? ext.map(suffix => bin + suffix)
+    : [bin]
+  const pathEnv = process.env.PATH || ""
+  const separator = process.platform === "win32" ? ";" : ":"
+  const hasPath = bin.includes("/") || bin.includes("\\")
+  const directories = hasPath ? [""] : pathEnv.split(separator)
+  for (const directory of directories) {
+    for (const name of names) {
+      const candidate = directory ? join(directory, name) : name
+      try {
+        if (existsSync(candidate)) return resolve(candidate)
+      } catch {}
+    }
+  }
+  return null
+}
+
 function modulePath() {
   return fileURLToPath(import.meta.url)
 }
@@ -110,9 +130,11 @@ function ensureInstalledCopy() {
 export function resolveCuratorArgv() {
   const override = process.env.AUTOLEARN_CURATOR_BIN || process.env.AUTOLEARN_CURSOR_AGENT || ""
   let bin = override.trim()
-  if (!bin) {
+  if (bin) {
+    bin = resolveExecutable(bin)
+  } else {
     const env = core.harnessBinEnv("agent", ["pi", "opencode2", "opencode"])
-    bin = env.AUTOLEARN_HARNESS_BIN || ""
+    bin = env.AUTOLEARN_HARNESS_BIN ? resolveExecutable(env.AUTOLEARN_HARNESS_BIN) : null
   }
   if (!bin) return null
 
@@ -123,20 +145,27 @@ export function resolveCuratorArgv() {
   if (base === "pi") {
     return [bin, "-p", "--no-session", "-na", CURATOR_PROMPT]
   }
-  // OpenCode v1/v2: one-shot run with the curator prompt (no attached file).
-  return [bin, "run", CURATOR_PROMPT, "--title", "autolearn curator"]
+  if (base === "opencode" || base === "opencode2") {
+    // OpenCode v1/v2: one-shot run with the curator prompt (no attached file).
+    return [bin, "run", CURATOR_PROMPT, "--title", "autolearn curator"]
+  }
+  return null
 }
 
 /** Tiny PowerShell trampoline Task Scheduler can quote reliably. */
-function writeJobLauncher(job) {
+function writeJobLauncher(job, curatorBin = "") {
   mkdirSync(SCHEDULE_DIR, { recursive: true })
   const psPath = join(SCHEDULE_DIR, `autolearn-job-${job}.ps1`)
   const mod = installedModulePath().replace(/'/g, "''")
   const node = process.execPath.replace(/'/g, "''")
+  const curatorEnv = job === "curator" && curatorBin
+    ? [`$env:AUTOLEARN_CURATOR_BIN = '${curatorBin.replace(/'/g, "''")}'`]
+    : []
   writeFileSync(
     psPath,
     [
       "$ErrorActionPreference = 'Stop'",
+      ...curatorEnv,
       `& '${node}' '${mod}' --run ${job}`,
       "exit $LASTEXITCODE",
       "",
@@ -167,12 +196,15 @@ function schtasksDelete(taskName) {
   }
 }
 
-export function crontabLines() {
+export function crontabLines(curatorBin = "") {
   const mod = modulePath()
   const node = process.execPath
+  const curatorEnv = curatorBin
+    ? `AUTOLEARN_CURATOR_BIN='${curatorBin.replace(/'/g, "'\\''")}' `
+    : ""
   return [
     `15 12 * * * "${node}" "${mod}" --run topics >/dev/null 2>&1`,
-    `0 13 * * * "${node}" "${mod}" --run curator >/dev/null 2>&1`,
+    `0 13 * * * ${curatorEnv}"${node}" "${mod}" --run curator >/dev/null 2>&1`,
   ].join("\n")
 }
 
@@ -194,7 +226,7 @@ export function installSchedule() {
     }
     return {
       ok: true,
-      crontab: crontabLines(),
+      crontab: crontabLines(curator[0]),
       note: "Times assume a Europe/London (or UTC+0/+1) host matching the prior OpenChamber slot.",
       curatorBin: curator[0],
     }
@@ -209,7 +241,7 @@ export function installSchedule() {
   }
 
   ensureInstalledCopy()
-  const curatorPs = writeJobLauncher("curator")
+  const curatorPs = writeJobLauncher("curator", curator[0])
   const topicsPs = writeJobLauncher("topics")
   const c = schtasksCreate(CURATOR_TASK, CURATOR_TIME, curatorPs)
   const t = schtasksCreate(TOPICS_TASK, TOPICS_TIME, topicsPs)
