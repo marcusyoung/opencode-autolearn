@@ -76,8 +76,8 @@ export const WATCH_LAUNCHER = join(CURSOR_HOME, "autolearn-cursor-watch.ps1")
  * Write the resident-watcher launcher (Windows only). Mirrors the proven
  * auto-push pattern: a long-lived process started once at logon via a hidden
  * Startup shortcut, rather than a Task Scheduler console process per cycle.
- * The watcher runs node --watch inside a hidden PowerShell console, so no
- * window is ever drawn and children inherited from it stay hidden too.
+ * The watcher itself runs inside a hidden PowerShell console. Detached
+ * reviewer children do NOT inherit that — see launchReviewer.
  */
 export function writeWatchLauncher() {
   if (process.platform !== "win32") return
@@ -202,9 +202,10 @@ export function saveState(id, st) {
 
 /**
  * Launch the headless reviewer (`agent -p --force`) against the review file,
- * detached. On Windows the Cursor CLI is a `.cmd`/`.ps1` shim; the whole tree
- * stays hidden because the watcher runs inside a hidden console (Startup
- * shortcut) and children inherit it.
+ * detached. On Windows the Cursor CLI is a `.cmd` → PowerShell shim tree;
+ * `windowsHide` / a hidden parent console only cover the immediate child, so
+ * route through the same WScript WindowStyle-0 launcher used for `uv`
+ * (`hide-uv.vbs`) so the whole agent → powershell → node tree stays off-screen.
  */
 export function launchReviewer({ reviewFile, cwd }) {
   const prompt = `The autolearn session review is the file at ${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
@@ -212,12 +213,16 @@ export function launchReviewer({ reviewFile, cwd }) {
   const opts = { cwd: cwd || CURSOR_HOME, env, unref: true }
   let argv
   if (process.platform === "win32") {
-    // cmd /s strips the first/last quote of its /c argument, so leave the
-    // binary unquoted and quote only the prompt.
-    const comspec = process.env.ComSpec || "cmd.exe"
-    const command = `${REVIEWER_BIN} -p --force "${prompt.replace(/"/g, '\\"')}"`
-    argv = [comspec, "/d", "/s", "/c", command]
-    opts.windowsVerbatimArguments = true
+    // Pass agent args as separate VBS arguments (same shape as hide-uv → uv).
+    // Do not wrap a single `cmd /c "..."` string: VBS re-quotes each arg and
+    // nested quotes in the prompt would break the Run command line.
+    try {
+      mkdirSync(join(process.env.USERPROFILE || "", ".local", "bin"), { recursive: true })
+      writeFileSync(core.HIDE_UV_VBS, core.HIDE_UV_VBS_CONTENT)
+    } catch (err) {
+      core.dbg("cursor launchReviewer: hide-uv.vbs ensure failed", err.message)
+    }
+    argv = ["wscript.exe", core.HIDE_UV_VBS, REVIEWER_BIN, "-p", "--force", prompt]
   } else {
     argv = [REVIEWER_BIN, "-p", "--force", prompt]
   }
