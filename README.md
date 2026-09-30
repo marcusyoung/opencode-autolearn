@@ -311,7 +311,7 @@ Autolearn records conversation excerpts locally to learn from them. By default *
 - All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
 - Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
 - The adapters and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted: the adapter auto-pulls on session start and auto-pushes after reviews when `AUTOLEARN_SYNC_API_KEY` is set. Two interchangeable backends: **Fastify** (self-hosted, free, `sync-server/`) or **Convex** (managed, `sync-convex/`). See [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
-- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json` plus the two files from `~/.pi/agent/extensions/`.
+- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`, the two files from `~/.pi/agent/extensions/`, and the Cursor artefacts (`~/.cursor/autolearn-cursor.mjs`, `~/.cursor/autolearn-core.mjs`, `~/.cursor/autolearn-cursor-watch.ps1`, `~/.cursor/rules/autolearn-observer.mdc`, and the `AutoLearnCursorScan.lnk` Startup shortcut — run `node ~/.cursor/autolearn-cursor.mjs --schedule --remove` to remove the rule launcher and shortcut).
 
 ## Uninstall
 
@@ -325,6 +325,13 @@ rm ~/.config/opencode/plugins/autolearn.js \
    ~/.pi/agent/extensions/autolearn-pi.ts \
    ~/.pi/agent/extensions/autolearn-core.mjs
 rm -rf ~/.agents/skills/autolearn
+
+# Cursor: remove the autostart entry first (drops the watcher launcher + Startup
+# shortcut), then the adapter, shared core, and observer rule. On Windows this
+# only works if node is still present.
+node ~/.cursor/autolearn-cursor.mjs --schedule --remove
+rm -f ~/.cursor/autolearn-cursor.mjs ~/.cursor/autolearn-core.mjs \
+      ~/.cursor/rules/autolearn-observer.mdc
 
 # Remove local data stores (optional — keeps your learned memory/skills)
 # rm -rf ~/.autolearn ~/.agent-improvement

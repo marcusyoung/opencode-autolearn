@@ -71,10 +71,16 @@ if command -v node &>/dev/null; then
 elif command -v bun &>/dev/null; then
   JS_RUNTIME="bun"
 fi
+CURSOR_DEFERRED=false
 if [[ -n "$JS_RUNTIME" ]]; then
   "$JS_RUNTIME" "$CURSOR_DIR/autolearn-cursor.mjs" --install || true
   "$JS_RUNTIME" "$CURSOR_DIR/autolearn-cursor.mjs" --schedule || true
 else
+  # No runtime to write the observer rule / register autostart. The adapter and
+  # core copies still land above; only these two steps are deferred, so the
+  # Verify step must not fail on the missing rule (a deferred install is not a
+  # broken install).
+  CURSOR_DEFERRED=true
   echo "  Warning: node/bun not found. Run manually:"
   echo "    node ~/.cursor/autolearn-cursor.mjs --install"
   echo "    node ~/.cursor/autolearn-cursor.mjs --schedule"
@@ -221,7 +227,11 @@ OK=true
 [[ -f "$PI_EXT_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PI_EXT_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-cursor.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-cursor.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-core.mjs"; OK=false; }
-[[ -f "$CURSOR_DIR/rules/autolearn-observer.mdc" ]] || { echo "  MISSING: $CURSOR_DIR/rules/autolearn-observer.mdc"; OK=false; }
+if $CURSOR_DEFERRED; then
+    echo "  DEFERRED: $CURSOR_DIR/rules/autolearn-observer.mdc (no node/bun — run autolearn-cursor.mjs --install)"
+else
+    [[ -f "$CURSOR_DIR/rules/autolearn-observer.mdc" ]] || { echo "  MISSING: $CURSOR_DIR/rules/autolearn-observer.mdc"; OK=false; }
+fi
 [[ -f "$SKILLS_DIR/autolearn/SKILL.md" ]] || { echo "  MISSING: skills/autolearn"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/scripts/autolearn.py" ]] || { echo "  MISSING: skills/autolearn/scripts/autolearn.py"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/scripts/improve.py" ]] || { echo "  MISSING: skills/autolearn/scripts/improve.py"; OK=false; }
