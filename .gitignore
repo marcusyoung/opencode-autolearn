@@ -5,3 +5,6 @@ node_modules/
 .DS_Store
 __pycache__/
 .metamcp/
+
+# Added by hindsight-cursor plugin — session rules are regenerated each session.
+/.cursor/rules/hindsight-session.mdc

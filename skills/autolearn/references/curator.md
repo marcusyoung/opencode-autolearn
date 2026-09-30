@@ -2,8 +2,8 @@
 
 You are the autolearn curator. Your job is to review the skill library at
 `$HOME/.autolearn/skills/` and maintain its health. This mode runs as a
-scheduled job (weekly by default) or manually when the library feels
-cluttered.
+scheduled job (daily by default via the local OS scheduler) or manually when
+the library feels cluttered.
 
 CLI: `$HOME/.agents/skills/autolearn/scripts/autolearn.py`
 
@@ -70,10 +70,22 @@ Curator report:
 
 ## Scheduling
 
-Weekly cron example (OpenCode scheduler):
+Daily local OS scheduler (preferred — harness-neutral):
 
 ```bash
-opencode schedule "autolearn-curator" --cron "0 3 * * 0"
+node ~/.autolearn/bin/autolearn-schedule.mjs --install
+# Windows: Task Scheduler AutoLearnCurator @ 13:00 local + AutoLearnTopicsScan @ 12:15
+# POSIX: prints crontab lines
+```
+
+Disable any OpenChamber / OpenCode `autolearn-curator` entry first so the
+curator does not run twice. Proposals scan is covered by `curator run` (no
+separate schedule). See the README “Running the curator on a schedule” section.
+
+Legacy OpenCode scheduler example (v1 only; prefer the local scheduler above):
+
+```bash
+opencode schedule "autolearn-curator" --cron "0 13 * * *"
 --agent autolearn-reviewer
 --prompt "Load the autolearn skill and follow references/curator.md to run the curator."
 ```

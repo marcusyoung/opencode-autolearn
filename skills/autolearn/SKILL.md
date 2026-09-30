@@ -36,7 +36,7 @@ which reference to load:
 |------|--------------|-----------|
 | Observer | The main agent, every session (trigger lives in the description) | `~/.agents/skills/autolearn/references/observer.md` |
 | Reviewer | The `autolearn-reviewer` subagent spawned by the plugin | `~/.agents/skills/autolearn/references/reviewer.md` |
-| Curator | A scheduled maintenance job (weekly by default) | `~/.agents/skills/autolearn/references/curator.md` |
+| Curator | A scheduled maintenance job (daily by default via local OS scheduler) | `~/.agents/skills/autolearn/references/curator.md` |
 
 Read your mode's reference file with the `read` tool before acting. The
 signal taxonomy below is shared by every mode and is the single source of

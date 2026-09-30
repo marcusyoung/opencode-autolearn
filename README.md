@@ -168,7 +168,7 @@ Config lives at `~/.autolearn/personas/default/config.yaml`:
 review_threshold: 5           # user messages (exchanges) between reviews
 session_review_on_idle: true  # spawn review on session idle
 max_conversation_buffer: 50   # max messages in buffer
-curator_interval_days: 7      # how often to run curator
+curator_interval_days: 7      # legacy/config placeholder (not read by curator run; wall-clock cadence is the OS schedule)
 stale_after_days: 30          # days before skill → stale
 archive_after_days: 90        # days before skill → archived
 escalation_threshold: 3       # reinforcement count before curator suggests promotion to AGENTS.md
@@ -276,14 +276,32 @@ Full design documentation lives in `docs/`:
 
 ## Running the curator on a schedule
 
+Autolearn registers two local OS jobs (harness-neutral — not OpenCode/Cursor-specific):
+
+| Job | When (local time) | What runs |
+|-----|-------------------|-----------|
+| `AutoLearnCurator` | Daily 13:00 | Auto-detected `agent`, `pi`, `opencode2`, or `opencode` one-shot curator prompt |
+| `AutoLearnTopicsScan` | Daily 12:15 | `uv run …/autolearn.py topics scan` |
+
+**Proposals scan is not a separate job.** `curator run` (step 1 of the curator agent) already embeds `proposals.scan` → verify → promote, so a second daily proposals task would only duplicate work.
+
+**Duplicate safety.** Before enabling the local curator task, disable or delete any OpenChamber / OpenCode `autolearn-curator` schedule so the curator never runs twice per day. The installer does not edit OpenChamber config for you.
+
 ```bash
-# Weekly curator via opencode-scheduler (v1 `opencode schedule`;
-# v2 beta has no schedule subcommand yet)
-opencode schedule "autolearn-curator" --cron "0 3 * * 0" \
-  --agent autolearn-reviewer \
-  --prompt "Load the autolearn skill and follow references/curator.md to run the curator."
+# Install (Windows: Task Scheduler; POSIX: prints crontab lines)
+node ~/.autolearn/bin/autolearn-schedule.mjs --install
+
+# Remove
+node ~/.autolearn/bin/autolearn-schedule.mjs --remove
+
+# Run once (same path the scheduled task uses)
+node ~/.autolearn/bin/autolearn-schedule.mjs --run topics
+node ~/.autolearn/bin/autolearn-schedule.mjs --run curator
 ```
 
+On Windows the tasks launch through a hidden wait-capable VBS wrapper (no console flash). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`); override with `AUTOLEARN_CURATOR_BIN`.
+
+`curator_interval_days` in `~/.autolearn/personas/default/config.yaml` is **not** read by `curator run` and does not throttle the OS schedule — wall-clock frequency is controlled only by the Task Scheduler / crontab entries above.
 ## Troubleshooting
 
 **`opencode2` logs a plugin warning for autolearn.js.** Under v2, a warning like `failed to load plugin .../plugins/autolearn.js ... Expected object at ["default"]` appears once per service start. This is expected: v2 normalizes the v1 `plugin` key and cannot load v1-style plugins, so it skips the v1 shell and loads `./plugins/autolearn-v2.js` from the `plugins` key instead. Verify with `opencode2 plugin list` — the `autolearn-v2.js` entry must not be `(failed)`. Once you retire v1, remove the `plugin` entry from `opencode.json` to silence the warning.
@@ -311,7 +329,7 @@ Autolearn records conversation excerpts locally to learn from them. By default *
 - All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
 - Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
 - The adapters and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted: the adapter auto-pulls on session start and auto-pushes after reviews when `AUTOLEARN_SYNC_API_KEY` is set. Two interchangeable backends: **Fastify** (self-hosted, free, `sync-server/`) or **Convex** (managed, `sync-convex/`). See [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
-- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`, the two files from `~/.pi/agent/extensions/`, and the Cursor artefacts (`~/.cursor/autolearn-cursor.mjs`, `~/.cursor/autolearn-core.mjs`, `~/.cursor/autolearn-cursor-watch.ps1`, `~/.cursor/rules/autolearn-observer.mdc`, and the `AutoLearnCursorScan.lnk` Startup shortcut — run `node ~/.cursor/autolearn-cursor.mjs --schedule --remove` to remove the rule launcher and shortcut).
+- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`, the two files from `~/.pi/agent/extensions/`, and the Cursor artefacts (`~/.cursor/autolearn-cursor.mjs`, `~/.cursor/autolearn-core.mjs`, `~/.cursor/autolearn-cursor-watch.ps1`, `~/.cursor/rules/autolearn-observer.mdc`, and the `AutoLearnCursorScan.lnk` Startup shortcut — run `node ~/.cursor/autolearn-cursor.mjs --schedule --remove` to remove the rule launcher and shortcut). Also remove the maintenance tasks: `node ~/.autolearn/bin/autolearn-schedule.mjs --remove`.
 
 ## Uninstall
 
@@ -332,6 +350,12 @@ rm -rf ~/.agents/skills/autolearn
 node ~/.cursor/autolearn-cursor.mjs --schedule --remove
 rm -f ~/.cursor/autolearn-cursor.mjs ~/.cursor/autolearn-core.mjs \
       ~/.cursor/rules/autolearn-observer.mdc
+
+# Maintenance schedule (curator + topics Task Scheduler / crontab entries)
+node ~/.autolearn/bin/autolearn-schedule.mjs --remove
+rm -f ~/.autolearn/bin/autolearn-schedule.mjs ~/.autolearn/bin/autolearn-core.mjs \
+      ~/.autolearn/bin/autolearn-job-curator.ps1 ~/.autolearn/bin/autolearn-job-topics.ps1 \
+      ~/.local/bin/hide-run-wait.vbs
 
 # Remove local data stores (optional — keeps your learned memory/skills)
 # rm -rf ~/.autolearn ~/.agent-improvement
