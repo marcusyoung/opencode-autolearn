@@ -64,6 +64,7 @@ echo "[2/7] Installing Cursor adapter..."
 mkdir -p "$CURSOR_DIR"
 cp "$REPO_DIR/plugin/autolearn-cursor.mjs" "$CURSOR_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$CURSOR_DIR/"
+cp "$REPO_DIR/plugin/autolearn-auth.mjs" "$CURSOR_DIR/"
 
 JS_RUNTIME=""
 if command -v node &>/dev/null; then
@@ -94,6 +95,7 @@ echo "[3/7] Installing maintenance schedule..."
 mkdir -p "$SCHEDULE_DIR"
 cp "$REPO_DIR/plugin/autolearn-schedule.mjs" "$SCHEDULE_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$SCHEDULE_DIR/"
+cp "$REPO_DIR/plugin/autolearn-auth.mjs" "$SCHEDULE_DIR/"
 if [[ -n "$JS_RUNTIME" ]]; then
   "$JS_RUNTIME" "$SCHEDULE_DIR/autolearn-schedule.mjs" --install || true
 else
@@ -242,8 +244,10 @@ OK=true
 [[ -f "$PI_EXT_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $PI_EXT_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-cursor.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-cursor.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$CURSOR_DIR/autolearn-auth.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-auth.mjs"; OK=false; }
 [[ -f "$SCHEDULE_DIR/autolearn-schedule.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-schedule.mjs"; OK=false; }
 [[ -f "$SCHEDULE_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$SCHEDULE_DIR/autolearn-auth.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-auth.mjs"; OK=false; }
 if $CURSOR_DEFERRED; then
     echo "  DEFERRED: $CURSOR_DIR/rules/autolearn-observer.mdc (no node/bun — run autolearn-cursor.mjs --install)"
 else

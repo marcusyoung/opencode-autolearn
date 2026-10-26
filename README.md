@@ -122,9 +122,34 @@ If you prefer to edit `~/.config/opencode/opencode.json` yourself, here is what 
 - **Review trigger** is a transcript-driven scan. `autolearn-cursor.mjs --scan` reads each conversation transcript at `~/.cursor/projects/*/agent-transcripts/<conversation_id>/<conversation_id>.jsonl` (nested `subagents/` are ignored), counts user messages per conversation, and spawns `agent -p --force` once `review_threshold` user messages have accrued. The absolute count is recomputed each scan and the reviewed slice advances only on an admitted spawn, so repeated scans are idempotent.
 - **Scheduling** is a resident watcher: `--watch` runs a single long-lived process that scans on an internal timer (default 5 min). `--schedule` installs a hidden Startup shortcut (`AutoLearnCursorScan.lnk` → `powershell -WindowStyle Hidden -File ~/.cursor/autolearn-cursor-watch.ps1`) that starts the watcher at logon — the same resident-daemon pattern as the auto-push utility. No Task Scheduler console process. Cursor's own Automations run cloud agents and cannot reach the local store, so they are not used.
 - **No console flash on Windows.** The watcher runs inside a hidden console. Detached `agent` reviewer spawns do not inherit that console — on Windows they are launched via the same `hide-uv.vbs` WScript WindowStyle-0 wrapper used for `uv`, so the agent → PowerShell → node tree stays off-screen.
+- **Auth preflight.** Each scan cycle asks the Cursor CLI whether it can authenticate before writing a review file or spawning anything (see *Cursor CLI authentication* below). An unauthenticated cycle spawns nothing, writes no review file, consumes no throttle window, and logs one `auth_missing` observation per distinct failure state rather than one per cycle.
 - **Cadence + throttle are shared** with the other harnesses: `review_threshold`, `min_interval_ms`, `max_reviews_per_day`, and identical-conversation dedupe all come from `autolearn-core.mjs`, so Cursor reviews compete for the same global budget.
 - **Idle/exit reviews** have no batch equivalent and are not produced for Cursor; threshold reviews only.
 - **Transcripts must be enabled** in Cursor; a missing transcript or transcripts directory is a safe no-op.
+
+### Cursor CLI authentication (read this before debugging a silent pipeline)
+
+The reviewer and curator are detached `agent` processes, so they authenticate as the **Cursor CLI**, not as the Cursor editor. That state lives outside Autolearn: a CLI upgrade, a logout, or an expired session silently invalidates it, and because the reviewer's stdout/stderr are discarded by the silent-spawn wrapper, a dead credential is indistinguishable from a healthy run — review files pile up, nothing reaches memory or the wiki, and no error is printed.
+
+**Preferred credential: a user-scope environment variable**, which survives logouts and CLI upgrades because nothing rewrites it:
+
+```powershell
+[Environment]::SetEnvironmentVariable("CURSOR_API_KEY", "<key from cursor.com dashboard>", "User")
+# then restart the watcher (log off/on, or kill and relaunch the Startup shortcut)
+```
+
+`agent` prefers `CURSOR_API_KEY` over its own login store, so setting it removes the failure mode entirely. Fallback if you would rather not use a key: run `agent login`, and re-run it whenever the CLI is upgraded.
+
+**Where a lapse shows up** (checked in this order):
+
+| Surface | Meaning |
+|---|---|
+| `node ~/.cursor/autolearn-cursor.mjs --scan` exits `3` and prints `not authenticated` | The preflight refused to spawn; nothing was written and no throttle window was consumed |
+| `{"type":"auth_missing","reason":...}` in `~/.autolearn/personas/default/observations.jsonl` | One entry per distinct auth state, not one per 5-minute cycle |
+| `AutoLearnCurator` Task Scheduler result `3` (vs `1` for a spawn failure) | The curator refused to run for the same reason |
+| `AutoLearnTopicsScan` result `4`, plus `{"type":"pipeline_stale",...}` | Reviews are spawning but none completed past `stale_after_hours` (default 48) in `config.yaml` |
+
+The last two are backstops: they catch a dead pipeline even when the cause is not auth (crash, harness regression, bad prompt). Without them the only symptom is a wiki that quietly stops changing.
 
 ## pi adapter notes
 
@@ -297,7 +322,20 @@ node ~/.autolearn/bin/autolearn-schedule.mjs --remove
 # Run once (same path the scheduled task uses)
 node ~/.autolearn/bin/autolearn-schedule.mjs --run topics
 node ~/.autolearn/bin/autolearn-schedule.mjs --run curator
+node ~/.autolearn/bin/autolearn-schedule.mjs --run health
 ```
+
+Exit codes are part of the contract, because Task Scheduler only records a number:
+
+| Code | Meaning |
+|---|---|
+| `0` | ok |
+| `1` | harness/spawn failure (no usable curator binary, or the child could not start) |
+| `2` | bad usage |
+| `3` | Cursor CLI not authenticated — run `agent login`, or set `CURSOR_API_KEY` |
+| `4` | reviews are spawning but none completing (see `stale_after_hours`) |
+
+The `topics` job runs the pure-Python `topics scan` and then the health check, so the existing daily task turns red (`4`) if the reviewer pipeline dies — no third scheduled task. `--run health` runs that check alone.
 
 On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `autolearn-job-*.cmd` (no console host at the root; runs allowed on battery). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`) and pinned by absolute path in the job launcher; override with `AUTOLEARN_CURATOR_BIN`.
 
@@ -308,6 +346,8 @@ On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `a
 **`opencode2` logs a plugin warning for autolearn.js.** Under v2, a warning like `failed to load plugin .../plugins/autolearn.js ... Expected object at ["default"]` appears once per service start. This is expected: v2 normalizes the v1 `plugin` key and cannot load v1-style plugins, so it skips the v1 shell and loads `./plugins/autolearn-v2.js` from the `plugins` key instead. Verify with `opencode2 plugin list` — the `autolearn-v2.js` entry must not be `(failed)`. Once you retire v1, remove the `plugin` entry from `opencode.json` to silence the warning.
 
 **Reviews silently failing.** When a threshold- or idle-triggered review fails to spawn, the adapter saves the formatted review (context + conversation) to `~/.autolearn/review-failed-{timestamp}.md`. List recent failures with `ls ~/.autolearn/review-failed-*.md`. The error itself is logged to `~/.autolearn/debug.log` (when `AUTOLEARN_DEBUG=1` is set) and to stderr — read the most recent failure file to see which conversation triggered it.
+
+**Reviews spawn but nothing new reaches memory, skills, or the wiki.** Check the Cursor CLI credential first — a lapsed CLI login kills every detached reviewer while the scan keeps writing review files, so the pipeline looks busy and does nothing. `node ~/.cursor/autolearn-cursor.mjs --scan` exits `3` and `observations.jsonl` gains an `auth_missing` entry at the moment it breaks; `AutoLearnTopicsScan` flips to result `4` once spawns have gone unanswered for `stale_after_hours`. Fix with `agent login` or a `CURSOR_API_KEY` user env var (see *Cursor CLI authentication*).
 
 **Enabling debug output.** Set `AUTOLEARN_DEBUG=1` before starting your harness to write verbose adapter output to `~/.autolearn/debug.log`.
 
