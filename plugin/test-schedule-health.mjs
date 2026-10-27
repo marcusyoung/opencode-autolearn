@@ -13,7 +13,7 @@ import { mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
-import { checkPipelineHealth } from "./autolearn-schedule.mjs"
+import { checkPipelineHealth, isCursorCuratorBin } from "./autolearn-schedule.mjs"
 
 const HOUR = 3600 * 1000
 
@@ -38,6 +38,32 @@ test("healthy pipeline is not stale", () => {
   assert.equal(h.stale, false)
   assert.equal(h.spawned, 1)
   assert.equal(h.completed, 1)
+})
+
+test("completed idle stretch outside the window is not stale", () => {
+  // Bugbot: a quiet pipeline with answered spawns must not exit 4 just because
+  // lastComplete is older than stale_after_hours.
+  const now = Date.parse("2026-10-26T12:00:00Z")
+  const h = checkPipelineHealth({
+    obsFile: store([
+      { type: "review_spawned", timestamp: iso(now - 100 * HOUR) },
+      { type: "review_complete", timestamp: iso(now - 99 * HOUR) },
+    ]),
+    now,
+  })
+  assert.equal(h.stale, false)
+  assert.equal(h.spawned, 1)
+  assert.equal(h.completed, 1)
+})
+
+test("isCursorCuratorBin recognizes only Cursor CLI names", () => {
+  assert.equal(isCursorCuratorBin("agent"), true)
+  assert.equal(isCursorCuratorBin("C:\\bin\\agent.cmd"), true)
+  assert.equal(isCursorCuratorBin("/usr/local/bin/cursor-agent"), true)
+  assert.equal(isCursorCuratorBin("pi"), false)
+  assert.equal(isCursorCuratorBin("opencode"), false)
+  assert.equal(isCursorCuratorBin("opencode2.exe"), false)
+  assert.equal(isCursorCuratorBin(""), false)
 })
 
 test("spawns with no completion are stale", () => {

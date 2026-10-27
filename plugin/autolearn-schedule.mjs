@@ -44,6 +44,7 @@ import { resolveAuth, readAuthState, writeAuthState, nextAuthState } from "./aut
 export const SCHEDULE_DIR = join(core.AL_HOME, "bin")
 export const MODULE_INSTALL_NAME = "autolearn-schedule.mjs"
 export const CORE_INSTALL_NAME = "autolearn-core.mjs"
+export const AUTH_INSTALL_NAME = "autolearn-auth.mjs"
 
 export const CURATOR_TASK = "AutoLearnCurator"
 export const TOPICS_TASK = "AutoLearnTopicsScan"
@@ -113,19 +114,34 @@ function ensureHideLaunchers() {
 function ensureInstalledCopy() {
   mkdirSync(SCHEDULE_DIR, { recursive: true })
   const here = modulePath()
-  const coreHere = join(dirname(here), CORE_INSTALL_NAME)
-  const destMod = installedModulePath()
-  const destCore = join(SCHEDULE_DIR, CORE_INSTALL_NAME)
+  const srcDir = dirname(here)
+  const copies = [
+    { src: here, dest: installedModulePath() },
+    { src: join(srcDir, CORE_INSTALL_NAME), dest: join(SCHEDULE_DIR, CORE_INSTALL_NAME) },
+    { src: join(srcDir, AUTH_INSTALL_NAME), dest: join(SCHEDULE_DIR, AUTH_INSTALL_NAME) },
+  ]
   try {
-    if (resolve(here) !== resolve(destMod) || !existsSync(destMod)) {
-      copyFileSync(here, destMod)
+    for (const { src, dest } of copies) {
+      if (!existsSync(src)) continue
+      if (resolve(src) !== resolve(dest) || !existsSync(dest)) {
+        copyFileSync(src, dest)
+      }
     }
-    if (existsSync(coreHere) && (resolve(coreHere) !== resolve(destCore) || !existsSync(destCore))) {
-      copyFileSync(coreHere, destCore)
+    for (const { dest } of copies) {
+      if (!existsSync(dest)) {
+        throw new Error(`missing installed module: ${dest}`)
+      }
     }
   } catch (err) {
     core.dbg("schedule: install copy failed", err.message)
   }
+}
+
+/** Cursor CLI harnesses that authenticate via resolveAuth; pi/opencode* do not. */
+export function isCursorCuratorBin(bin) {
+  if (!bin) return false
+  const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+  return base === "agent" || base === "cursor-agent"
 }
 
 /**
@@ -334,12 +350,23 @@ export function checkPipelineHealth(opts = {}) {
   }
 
   if (!result.spawned) return { ...result, reason: "no_spawns_in_window" }
-  // No completion at all inside the window means the pipeline has been dead for
-  // at least as long as the window, however recent the spawns are.
-  const anchor = result.lastComplete ? Date.parse(result.lastComplete) : 0
-  const gap = now - anchor
-  if (!result.lastComplete || gap > windowMs) {
-    return { ...result, stale: true, reason: result.lastComplete ? "spawns_outrun_completions" : "no_completion_in_window" }
+
+  // Only unanswered spawns can be stale. A completed idle stretch (lastComplete
+  // >= lastSpawn) must stay healthy even when both timestamps sit outside the
+  // window — otherwise a quiet pipeline exits 4 every day.
+  const spawnMs = result.lastSpawn ? Date.parse(result.lastSpawn) : 0
+  const completeMs = result.lastComplete ? Date.parse(result.lastComplete) : 0
+  const unanswered = !result.lastComplete || spawnMs > completeMs
+  if (!unanswered) return result
+
+  // No completion at all means the pipeline has never landed a review in the
+  // retained tail. Otherwise stale only once the gap since lastComplete exceeds
+  // the window (recent unanswered spawns are still allowed to finish).
+  if (!result.lastComplete) {
+    return { ...result, stale: true, reason: "no_completion_in_window" }
+  }
+  if (now - completeMs > windowMs) {
+    return { ...result, stale: true, reason: "spawns_outrun_completions" }
   }
   return result
 }
@@ -386,7 +413,9 @@ export function runJob(job) {
     // windowless launcher discards its stderr and Task Scheduler only records a
     // bare failure. Refusing here turns that into an identifyable exit code.
     const bin = curatorBin()
-    if (bin) {
+    // resolveAuth probes the Cursor CLI only; pi/opencode* curators have no
+    // Cursor login and must not be blocked by a failed agent status probe.
+    if (bin && isCursorCuratorBin(bin)) {
       const auth = resolveAuth(bin)
       const gate = nextAuthState(readAuthState(), auth, new Date(), "curator")
       writeAuthState(gate.states)
