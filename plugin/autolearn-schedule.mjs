@@ -5,14 +5,18 @@
  *   --install / --schedule              register Windows Task Scheduler jobs
  *                                       (or print crontab lines on POSIX)
  *   --remove / --schedule --remove      unregister those jobs
- *   --run curator|topics                invoke one job (what schtasks / cron call)
+ *   --run curator|topics|health       invoke one job (what schtasks / cron call)
  *
  * Jobs (Windows, local machine time):
  *   AutoLearnCurator      daily 13:00 — headless harness print/run with curator.md
- *   AutoLearnTopicsScan   daily 12:15 — `uv run … topics scan`
+ *   AutoLearnTopicsScan   daily 12:15 — `uv run … topics scan`, then the
+ *                         spawn-vs-completion health check (exit 4 when stale)
  *
  * Proposals scan is intentionally NOT scheduled: `curator run` (invoked by the
  * curator agent) already embeds proposer.scan → verify → promote.
+ *
+ * Exit codes: 0 ok, 1 spawn/harness failure, 2 usage, 3 Cursor CLI not
+ * authenticated, 4 reviews spawning but not completing.
  *
  * Windows launches go through a wait-capable WindowStyle-0 VBS wrapper so the
  * Task Scheduler process stays hidden and still waits for completion.
@@ -26,6 +30,7 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   unlinkSync,
   writeFileSync,
 } from "fs"
@@ -34,10 +39,12 @@ import { basename, dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
 import { spawnSync } from "child_process"
 import * as core from "./autolearn-core.mjs"
+import { resolveAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
 
 export const SCHEDULE_DIR = join(core.AL_HOME, "bin")
 export const MODULE_INSTALL_NAME = "autolearn-schedule.mjs"
 export const CORE_INSTALL_NAME = "autolearn-core.mjs"
+export const AUTH_INSTALL_NAME = "autolearn-auth.mjs"
 
 export const CURATOR_TASK = "AutoLearnCurator"
 export const TOPICS_TASK = "AutoLearnTopicsScan"
@@ -107,19 +114,34 @@ function ensureHideLaunchers() {
 function ensureInstalledCopy() {
   mkdirSync(SCHEDULE_DIR, { recursive: true })
   const here = modulePath()
-  const coreHere = join(dirname(here), CORE_INSTALL_NAME)
-  const destMod = installedModulePath()
-  const destCore = join(SCHEDULE_DIR, CORE_INSTALL_NAME)
+  const srcDir = dirname(here)
+  const copies = [
+    { src: here, dest: installedModulePath() },
+    { src: join(srcDir, CORE_INSTALL_NAME), dest: join(SCHEDULE_DIR, CORE_INSTALL_NAME) },
+    { src: join(srcDir, AUTH_INSTALL_NAME), dest: join(SCHEDULE_DIR, AUTH_INSTALL_NAME) },
+  ]
   try {
-    if (resolve(here) !== resolve(destMod) || !existsSync(destMod)) {
-      copyFileSync(here, destMod)
+    for (const { src, dest } of copies) {
+      if (!existsSync(src)) continue
+      if (resolve(src) !== resolve(dest) || !existsSync(dest)) {
+        copyFileSync(src, dest)
+      }
     }
-    if (existsSync(coreHere) && (resolve(coreHere) !== resolve(destCore) || !existsSync(destCore))) {
-      copyFileSync(coreHere, destCore)
+    for (const { dest } of copies) {
+      if (!existsSync(dest)) {
+        throw new Error(`missing installed module: ${dest}`)
+      }
     }
   } catch (err) {
     core.dbg("schedule: install copy failed", err.message)
   }
+}
+
+/** Cursor CLI harnesses that authenticate via resolveAuth; pi/opencode* do not. */
+export function isCursorCuratorBin(bin) {
+  if (!bin) return false
+  const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+  return base === "agent" || base === "cursor-agent"
 }
 
 /**
@@ -128,15 +150,16 @@ function ensureInstalledCopy() {
  * agent → pi → opencode2 → opencode found on PATH (via core.harnessBinEnv).
  * Returns argv for spawn, or null if nothing compatible is installed.
  */
-export function resolveCuratorArgv() {
+export function curatorBin() {
   const override = process.env.AUTOLEARN_CURATOR_BIN || process.env.AUTOLEARN_CURSOR_AGENT || ""
   let bin = override.trim()
-  if (bin) {
-    bin = resolveExecutable(bin)
-  } else {
-    const env = core.harnessBinEnv("agent", ["pi", "opencode2", "opencode"])
-    bin = env.AUTOLEARN_HARNESS_BIN ? resolveExecutable(env.AUTOLEARN_HARNESS_BIN) : null
-  }
+  if (bin) return resolveExecutable(bin)
+  const env = core.harnessBinEnv("agent", ["pi", "opencode2", "opencode"])
+  return env.AUTOLEARN_HARNESS_BIN ? resolveExecutable(env.AUTOLEARN_HARNESS_BIN) : null
+}
+
+export function resolveCuratorArgv() {
+  const bin = curatorBin()
   if (!bin) return null
 
   const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
@@ -285,6 +308,93 @@ export function removeSchedule() {
 }
 
 /**
+ * Staleness check: are reviews being spawned but never completing?
+ *
+ * A dead credential, a crashed reviewer, or a harness regression all look the
+ * same from the outside — review files pile up and nothing lands in memory or
+ * the wiki. This is the backstop that makes that visible: it compares the newest
+ * spawn against the newest completion inside the observation log's retained tail
+ * and reports only when spawns have gone unanswered past the window.
+ *
+ * Returns { stale, spawned, completed, lastSpawn, lastComplete, reason }.
+ */
+export function checkPipelineHealth(opts = {}) {
+  const {
+    obsFile = core.OBS_FILE,
+    now = Date.now(),
+    staleAfterMs,
+  } = opts
+  const config = core.parseConfig()
+  const hours = Number(config.stale_after_hours) > 0 ? Number(config.stale_after_hours) : 48
+  const windowMs = staleAfterMs || hours * 3600 * 1000
+
+  const result = { stale: false, spawned: 0, completed: 0, lastSpawn: null, lastComplete: null, reason: "" }
+  let lines = []
+  try { lines = readFileSync(obsFile, "utf8").split("\n") } catch {
+    return { ...result, reason: "no_observation_log" }
+  }
+
+  // The log is trimmed to core.MAX_OBS_LINES, so only the tail is authoritative.
+  const tail = lines.slice(-core.MAX_OBS_LINES)
+  for (const line of tail) {
+    if (!line.trim()) continue
+    let o
+    try { o = JSON.parse(line) } catch { continue }
+    if (o.type === "review_spawned") {
+      result.spawned++
+      if (!result.lastSpawn || o.timestamp > result.lastSpawn) result.lastSpawn = o.timestamp
+    } else if (o.type === "review_complete") {
+      result.completed++
+      if (!result.lastComplete || o.timestamp > result.lastComplete) result.lastComplete = o.timestamp
+    }
+  }
+
+  if (!result.spawned) return { ...result, reason: "no_spawns_in_window" }
+
+  // Only unanswered spawns can be stale. A completed idle stretch (lastComplete
+  // >= lastSpawn) must stay healthy even when both timestamps sit outside the
+  // window — otherwise a quiet pipeline exits 4 every day.
+  const spawnMs = result.lastSpawn ? Date.parse(result.lastSpawn) : 0
+  const completeMs = result.lastComplete ? Date.parse(result.lastComplete) : 0
+  const unanswered = !result.lastComplete || spawnMs > completeMs
+  if (!unanswered) return result
+
+  // No completion at all means the pipeline has never landed a review in the
+  // retained tail. Otherwise stale only once the gap since lastComplete exceeds
+  // the window (recent unanswered spawns are still allowed to finish).
+  if (!result.lastComplete) {
+    return { ...result, stale: true, reason: "no_completion_in_window" }
+  }
+  if (now - completeMs > windowMs) {
+    return { ...result, stale: true, reason: "spawns_outrun_completions" }
+  }
+  return result
+}
+
+/**
+ * Report pipeline staleness. Called by the daily `topics` job so the existing
+ * scheduled task turns red without adding a fourth one. Healthy → silent, exit 0.
+ */
+export function reportHealth(opts = {}) {
+  const h = checkPipelineHealth(opts)
+  if (!h.stale) {
+    core.dbg("health: ok", h)
+    return 0
+  }
+  const msg = [
+    `autolearn health: reviews are spawning but not completing`,
+    `reason=${h.reason}`,
+    `last_spawn=${h.lastSpawn || "none"}`,
+    `last_complete=${h.lastComplete || "none"}`,
+    `spawned_in_window=${h.spawned}`,
+    `completed_in_window=${h.completed}`,
+  ].join(" ")
+  console.error(msg)
+  core.logObs({ type: "pipeline_stale", ...h })
+  return 4
+}
+
+/**
  * Run one job synchronously. On Windows, wrap via hide-run-wait.vbs so the
  * console stays hidden and the process waits for completion.
  */
@@ -298,6 +408,25 @@ export function runJob(job) {
 
   let argv
   if (job === "curator") {
+    // Auth preflight before the harness argv is built: a curator child that
+    // cannot authenticate exits deep inside the detached process, where the
+    // windowless launcher discards its stderr and Task Scheduler only records a
+    // bare failure. Refusing here turns that into an identifyable exit code.
+    const bin = curatorBin()
+    // resolveAuth probes the Cursor CLI only; pi/opencode* curators have no
+    // Cursor login and must not be blocked by a failed agent status probe.
+    if (bin && isCursorCuratorBin(bin)) {
+      const auth = resolveAuth(bin)
+      const gate = nextAuthState(readAuthState(), auth, new Date(), "curator")
+      writeAuthState(gate.states)
+      if (gate.record) {
+        core.logObs({ type: "auth_missing", trigger: "curator", source: auth.source, reason: auth.reason })
+      }
+      if (!auth.ok) {
+        console.error(`autolearn curator: Cursor CLI not authenticated (${auth.reason}); run 'agent login' or set CURSOR_API_KEY`)
+        return 3
+      }
+    }
     argv = resolveCuratorArgv()
     if (!argv) {
       console.error("No curator harness found (agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN.")
@@ -305,8 +434,10 @@ export function runJob(job) {
     }
   } else if (job === "topics") {
     argv = ["uv", "run", core.AUTOLEARN_CLI, "topics", "scan"]
+  } else if (job === "health") {
+    return reportHealth()
   } else {
-    console.error(`Unknown job: ${job} (expected curator|topics)`)
+    console.error(`Unknown job: ${job} (expected curator|topics|health)`)
     return 2
   }
 
@@ -323,6 +454,13 @@ export function runJob(job) {
     console.error(`schedule --run ${job} failed:`, r.error.message)
     return 1
   }
+  // The topics job is pure Python and always succeeds on its own, so it carries
+  // the pipeline health verdict: a dead reviewer turns the existing daily task
+  // red without needing a fourth scheduled entry.
+  if (job === "topics") {
+    const health = reportHealth()
+    if (health !== 0) return health
+  }
   return r.status == null ? 1 : r.status
 }
 
@@ -331,7 +469,7 @@ function main(argv) {
     const i = argv.indexOf("--run")
     const job = argv[i + 1]
     if (!job || job.startsWith("-")) {
-      console.error("Usage: autolearn-schedule.mjs --run curator|topics")
+      console.error("Usage: autolearn-schedule.mjs --run curator|topics|health")
       process.exit(2)
     }
     process.exit(runJob(job))

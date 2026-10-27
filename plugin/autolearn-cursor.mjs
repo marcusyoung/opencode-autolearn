@@ -38,6 +38,7 @@ import { basename, join, resolve } from "path"
 import { fileURLToPath } from "url"
 import { spawnSync } from "child_process"
 import * as core from "./autolearn-core.mjs"
+import { resolveAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
 
 export const CURSOR_HOME = join(homedir(), ".cursor")
 export const PROJECTS_DIR = process.env.AUTOLEARN_CURSOR_PROJECTS || join(CURSOR_HOME, "projects")
@@ -242,6 +243,24 @@ export function scan() {
   const config = core.parseConfig()
   const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
 
+  // Auth preflight: refuse to write a review file or spawn a reviewer the CLI
+  // cannot authenticate. Runs before any state is touched so a lapsed login
+  // consumes no throttle window and orphans no review file. Without this guard
+  // a dead credential is indistinguishable from a healthy pipeline: the
+  // detached agent's stderr is discarded by the windowless launcher.
+  const auth = resolveAuth(REVIEWER_BIN)
+  const gate = nextAuthState(readAuthState(), auth, new Date(), "cursor")
+  writeAuthState(gate.states)
+  if (gate.record) {
+    core.logObs({ type: "auth_missing", trigger: "cursor", source: auth.source, reason: auth.reason })
+    core.dbg("cursor scan: auth preflight failed", auth.reason)
+  }
+  if (!auth.ok) {
+    result.authError = true
+    result.authReason = auth.reason
+    return result
+  }
+
   if (!existsSync(PROJECTS_DIR)) {
     core.dbg("cursor scan: no projects dir", PROJECTS_DIR)
     return result
@@ -427,6 +446,10 @@ function main(argv) {
   }
   if (argv.includes("--scan")) {
     const r = scan()
+    if (r.authError) {
+      console.error(`cursor scan: skipped - Cursor CLI not authenticated (${r.authReason}); run 'agent login' or set CURSOR_API_KEY`)
+      return 3
+    }
     console.log(`cursor scan: ${r.scanned} transcript(s), ${r.spawned} review(s) spawned`)
     return
   }
@@ -450,4 +473,9 @@ function main(argv) {
 }
 
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-if (invokedDirectly) main(process.argv.slice(2))
+if (invokedDirectly) {
+  // Propagate the exit code: --scan returns 3 on an auth failure so the caller
+  // (watcher log, cron, or a user's terminal) can tell "skipped" from "ran".
+  const code = main(process.argv.slice(2))
+  if (typeof code === "number" && code !== 0) process.exit(code)
+}
