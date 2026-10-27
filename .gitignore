@@ -8,3 +8,6 @@ __pycache__/
 
 # Added by hindsight-cursor plugin — session rules are regenerated each session.
 /.cursor/rules/hindsight-session.mdc
+
+# Added by hindsight-cursor plugin — session rules are regenerated each session.
+/.cursor\rules\hindsight-session.mdc

@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "hindsight": {
+      "url": "https://hindsight.int2.uk/mcp/opencode-autolearn",
+      "headers": {
+        "Authorization": "Bearer ${env:HINDSIGHT_API_TOKEN}"
+      }
+    },
+    "backlog": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "C:\\Users\\myoun\\AppData\\Roaming\\npm\\backlog.cmd",
+        "mcp",
+        "start",
+        "--cwd",
+        "C:\\Users\\myoun\\git-repos\\opencode-autolearn-local"
+      ],
+      "env": {
+        "BACKLOG_CWD": "C:\\Users\\myoun\\git-repos\\opencode-autolearn-local"
+      }
+    }
+  }
+}
