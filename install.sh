@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-autolearn installer (multi-harness: OpenCode v1, OpenCode v2, pi, Cursor)
+# agent-autolearn installer (multi-harness: OpenCode v1, OpenCode v2, pi, Cursor, Droid)
 #
 # Usage:
 #   bash install.sh                    # run from cloned repo
@@ -13,6 +13,8 @@
 #   - pi:             extension + shared core in ~/.pi/agent/extensions/
 #   - Cursor:         adapter + shared core in ~/.cursor/, always-applied
 #                     observer rule; reviews are transcript-driven (no hooks)
+#   - Factory Droid:  adapter + shared core in ~/.factory/autolearn/, Stop /
+#                     SessionEnd / PreCompact entries in ~/.factory/hooks.json
 # The skills + store (~/.autolearn) are shared by all harnesses.
 
 set -euo pipefail
@@ -38,7 +40,7 @@ echo ""
 # 1. Copy plugins/extensions. The core uses a .mjs extension so OpenCode v2's
 # plugins/ auto-discovery and pi's extensions/ discovery do not try to load
 # it as a plugin (both only discover .js/.ts files).
-echo "[1/7] Installing plugins/extensions..."
+echo "[1/8] Installing plugins/extensions..."
 mkdir -p "$PLUGIN_DIR"
 cp "$REPO_DIR/plugin/autolearn.js" "$PLUGIN_DIR/"
 cp "$REPO_DIR/plugin/autolearn-v2.js" "$PLUGIN_DIR/"
@@ -60,7 +62,7 @@ cp "$REPO_DIR/plugin/autolearn-core.mjs" "$PI_EXT_DIR/"
 # spawns a one-shot headless reviewer. The module + shared core land in
 # ~/.cursor/; --install writes the always-applied observer rule and
 # --schedule registers (or prints) the recurring scan job.
-echo "[2/7] Installing Cursor adapter..."
+echo "[2/8] Installing Cursor adapter..."
 mkdir -p "$CURSOR_DIR"
 cp "$REPO_DIR/plugin/autolearn-cursor.mjs" "$CURSOR_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$CURSOR_DIR/"
@@ -87,11 +89,29 @@ else
   echo "    node ~/.cursor/autolearn-cursor.mjs --schedule"
 fi
 
-# 2b. Harness-neutral maintenance schedule (curator + topics scan).
+# 3. Factory Droid adapter (hook-driven). --install appends autolearn entries
+# to Stop, SessionEnd and PreCompact in ~/.factory/hooks.json (backed up first;
+# other tools' hooks are kept).
+DROID_DIR="$HOME/.factory/autolearn"
+echo "[3/8] Installing Factory Droid adapter..."
+mkdir -p "$DROID_DIR"
+cp "$REPO_DIR/plugin/autolearn-droid.mjs" "$DROID_DIR/"
+cp "$REPO_DIR/plugin/autolearn-core.mjs" "$DROID_DIR/"
+cp "$REPO_DIR/plugin/autolearn-auth.mjs" "$DROID_DIR/"
+DROID_DEFERRED=false
+if [[ -n "$JS_RUNTIME" ]]; then
+  "$JS_RUNTIME" "$DROID_DIR/autolearn-droid.mjs" --install
+else
+  DROID_DEFERRED=true
+  echo "  Warning: node/bun not found. Run manually:"
+  echo "    node ~/.factory/autolearn/autolearn-droid.mjs --install"
+fi
+
+# 3b. Harness-neutral maintenance schedule (curator + topics scan).
 # Lives under ~/.autolearn/bin/; Windows registers Task Scheduler jobs, POSIX
 # prints crontab lines. Disable any OpenChamber autolearn-curator first.
 SCHEDULE_DIR="$HOME/.autolearn/bin"
-echo "[3/7] Installing maintenance schedule..."
+echo "[4/8] Installing maintenance schedule..."
 mkdir -p "$SCHEDULE_DIR"
 cp "$REPO_DIR/plugin/autolearn-schedule.mjs" "$SCHEDULE_DIR/"
 cp "$REPO_DIR/plugin/autolearn-core.mjs" "$SCHEDULE_DIR/"
@@ -107,14 +127,14 @@ fi
 # dirs (autolearn-reviewer, autolearn-curator, self-improving-agent). Only
 # removes the legacy dirs this installer owns; never touches agent-created
 # skills (e.g. autolearn-audit) or user-installed skills.
-echo "[4/7] Installing skills..."
+echo "[5/8] Installing skills..."
 mkdir -p "$SKILLS_DIR"
 rm -rf "$SKILLS_DIR/autolearn-reviewer" "$SKILLS_DIR/autolearn-curator" "$SKILLS_DIR/self-improving-agent"
 rm -rf "$SKILLS_DIR/autolearn"
 cp -r "$REPO_DIR/skills/autolearn" "$SKILLS_DIR/"
 
 # 5. Patch opencode.json
-echo "[5/7] Configuring opencode.json..."
+echo "[6/8] Configuring opencode.json..."
 mkdir -p "$(dirname "$OPENCODE_JSON")"
 
 python3 -c "
@@ -221,7 +241,7 @@ else:
 " 2>&1
 
 # 6. Initialize + bootstrap the registry (migrates legacy memory.md if present)
-echo "[6/7] Initializing autolearn store..."
+echo "[7/8] Initializing autolearn store..."
 CLI="$SKILLS_DIR/autolearn/scripts/autolearn.py"
 if [[ ! -f "$CLI" ]]; then
   CLI="$SKILLS_DIR/autolearn-reviewer/scripts/autolearn.py"
@@ -235,7 +255,7 @@ else
 fi
 
 # 7. Verify
-echo "[7/7] Verifying..."
+echo "[8/8] Verifying..."
 OK=true
 [[ -f "$PLUGIN_DIR/autolearn.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn.js"; OK=false; }
 [[ -f "$PLUGIN_DIR/autolearn-v2.js" ]] || { echo "  MISSING: $PLUGIN_DIR/autolearn-v2.js"; OK=false; }
@@ -245,6 +265,9 @@ OK=true
 [[ -f "$CURSOR_DIR/autolearn-cursor.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-cursor.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$CURSOR_DIR/autolearn-auth.mjs" ]] || { echo "  MISSING: $CURSOR_DIR/autolearn-auth.mjs"; OK=false; }
+[[ -f "$DROID_DIR/autolearn-droid.mjs" ]] || { echo "  MISSING: $DROID_DIR/autolearn-droid.mjs"; OK=false; }
+[[ -f "$DROID_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $DROID_DIR/autolearn-core.mjs"; OK=false; }
+[[ -f "$DROID_DIR/autolearn-auth.mjs" ]] || { echo "  MISSING: $DROID_DIR/autolearn-auth.mjs"; OK=false; }
 [[ -f "$SCHEDULE_DIR/autolearn-schedule.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-schedule.mjs"; OK=false; }
 [[ -f "$SCHEDULE_DIR/autolearn-core.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-core.mjs"; OK=false; }
 [[ -f "$SCHEDULE_DIR/autolearn-auth.mjs" ]] || { echo "  MISSING: $SCHEDULE_DIR/autolearn-auth.mjs"; OK=false; }
@@ -252,6 +275,12 @@ if $CURSOR_DEFERRED; then
     echo "  DEFERRED: $CURSOR_DIR/rules/autolearn-observer.mdc (no node/bun — run autolearn-cursor.mjs --install)"
 else
     [[ -f "$CURSOR_DIR/rules/autolearn-observer.mdc" ]] || { echo "  MISSING: $CURSOR_DIR/rules/autolearn-observer.mdc"; OK=false; }
+fi
+DROID_HOOKS="$HOME/.factory/hooks.json"
+if $DROID_DEFERRED; then
+    echo "  DEFERRED: Droid hooks (no node/bun — run autolearn-droid.mjs --install)"
+elif ! grep -qF 'autolearn-droid.mjs' "$DROID_HOOKS" 2>/dev/null; then
+    echo "  MISSING: autolearn hooks in $DROID_HOOKS"; OK=false
 fi
 [[ -f "$SKILLS_DIR/autolearn/SKILL.md" ]] || { echo "  MISSING: skills/autolearn"; OK=false; }
 [[ -f "$SKILLS_DIR/autolearn/scripts/autolearn.py" ]] || { echo "  MISSING: skills/autolearn/scripts/autolearn.py"; OK=false; }
@@ -261,7 +290,7 @@ fi
 
 echo ""
 if $OK; then
-    echo "Done! Autolearn will activate on your next OpenCode, pi, or Cursor session."
+    echo "Done! Autolearn will activate on your next OpenCode, pi, Cursor, or Droid session."
 else
     echo "Some files are missing — check the errors above."
     exit 1

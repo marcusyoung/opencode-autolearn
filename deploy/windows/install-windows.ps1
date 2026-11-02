@@ -80,7 +80,7 @@ if (-not $SkipPreflight) {
 # ---------------------------------------------------------------------------
 # 1. Plugin (v1 shell, v2 shell, patched shared core)
 # ---------------------------------------------------------------------------
-Write-Host "[1/7] Installing plugin..."
+Write-Host "[1/8] Installing plugin..."
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 foreach ($f in 'autolearn.js', 'autolearn-v2.js', 'autolearn-core.mjs') {
     $src = Join-Path $RepoDir "plugin\$f"
@@ -112,7 +112,7 @@ Set-Content -Path (Join-Path $localBin 'hide-uv.vbs') -Value $hideVbs -Encoding 
 # that scans Cursor's transcript files and spawns a one-shot headless reviewer.
 # The module + shared core land in ~/.cursor/; --install writes the always-
 # applied observer rule and --schedule registers the recurring scan task.
-Write-Host "[2/7] Installing Cursor adapter..."
+Write-Host "[2/8] Installing Cursor adapter..."
 New-Item -ItemType Directory -Force -Path $cursorDir | Out-Null
 foreach ($f in 'autolearn-cursor.mjs', 'autolearn-core.mjs', 'autolearn-auth.mjs') {
     $src = Join-Path $RepoDir "plugin\$f"
@@ -133,12 +133,35 @@ if ($jsRuntime) {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Maintenance schedule (curator + topics; harness-neutral)
+# 3. Factory Droid adapter (hook-driven)
+# ---------------------------------------------------------------------------
+# Droid fires lifecycle hooks, so --install appends autolearn entries to Stop,
+# SessionEnd and PreCompact in ~/.factory/hooks.json (backed up first; other
+# tools' hooks are kept).
+Write-Host "[3/8] Installing Factory Droid adapter..."
+$droidDir = Join-Path $env:USERPROFILE '.factory\autolearn'
+New-Item -ItemType Directory -Force -Path $droidDir | Out-Null
+foreach ($f in 'autolearn-droid.mjs', 'autolearn-core.mjs', 'autolearn-auth.mjs') {
+    $src = Join-Path $RepoDir "plugin\$f"
+    if (-not (Test-Path $src)) { throw "Missing plugin file: $src" }
+    Copy-Item $src $droidDir -Force
+}
+$droidDeferred = $false
+if ($jsRuntime) {
+    & $jsRuntime (Join-Path $droidDir 'autolearn-droid.mjs') --install
+    if ($LASTEXITCODE -ne 0) { throw "Droid hook registration failed." }
+} else {
+    $droidDeferred = $true
+    Write-Warning "node/bun not found; run: node ~/.factory/autolearn/autolearn-droid.mjs --install"
+}
+
+# ---------------------------------------------------------------------------
+# 4. Maintenance schedule (curator + topics; harness-neutral)
 # ---------------------------------------------------------------------------
 # Registers Windows Task Scheduler jobs. Disable any OpenChamber
 # autolearn-curator entry yourself first so the curator never runs twice.
 # Proposals scan is covered by curator run — not a separate task.
-Write-Host "[3/7] Installing maintenance schedule..."
+Write-Host "[4/8] Installing maintenance schedule..."
 $scheduleDir = Join-Path $env:USERPROFILE '.autolearn\bin'
 New-Item -ItemType Directory -Force -Path $scheduleDir | Out-Null
 foreach ($f in 'autolearn-schedule.mjs', 'autolearn-core.mjs', 'autolearn-auth.mjs') {
@@ -155,7 +178,7 @@ if ($jsRuntime) {
 # ---------------------------------------------------------------------------
 # 4. Skills
 # ---------------------------------------------------------------------------
-Write-Host "[4/7] Installing skills..."
+Write-Host "[5/8] Installing skills..."
 New-Item -ItemType Directory -Force -Path $skillsDir | Out-Null
 # Upstream consolidated three skills (autolearn-reviewer, autolearn-curator,
 # self-improving-agent) into one skills/autolearn skill. Remove the legacy dirs
@@ -172,14 +195,14 @@ Copy-Item $skillSrc $skillsDir -Recurse -Force
 # ---------------------------------------------------------------------------
 # 4. Merge opencode.json (JSONC-tolerant)
 # ---------------------------------------------------------------------------
-Write-Host "[5/7] Configuring opencode.json..."
+Write-Host "[6/8] Configuring opencode.json..."
 & python3 (Join-Path $scriptDir 'merge-opencode.py')
 if ($LASTEXITCODE -ne 0) { throw "opencode.json merge failed." }
 
 # ---------------------------------------------------------------------------
 # 6. Initialize + bootstrap the registry
 # ---------------------------------------------------------------------------
-Write-Host "[6/7] Initializing autolearn store..."
+Write-Host "[7/8] Initializing autolearn store..."
 $cli = Join-Path $skillsDir 'autolearn\scripts\autolearn.py'
 if (-not (Test-Path $cli)) { throw "CLI not found: $cli" }
 uv run $cli init
@@ -189,7 +212,7 @@ uv run $cli memory compose
 # ---------------------------------------------------------------------------
 # 7. Verify
 # ---------------------------------------------------------------------------
-Write-Host "[7/7] Verifying..."
+Write-Host "[8/8] Verifying..."
 $ok = $true
 foreach ($p in @(
     (Join-Path $pluginDir 'autolearn.js'),
@@ -198,6 +221,9 @@ foreach ($p in @(
     (Join-Path $cursorDir 'autolearn-cursor.mjs'),
     (Join-Path $cursorDir 'autolearn-core.mjs'),
     (Join-Path $cursorDir 'autolearn-auth.mjs'),
+    (Join-Path $droidDir 'autolearn-droid.mjs'),
+    (Join-Path $droidDir 'autolearn-core.mjs'),
+    (Join-Path $droidDir 'autolearn-auth.mjs'),
     (Join-Path $scheduleDir 'autolearn-schedule.mjs'),
     (Join-Path $scheduleDir 'autolearn-core.mjs'),
     (Join-Path $scheduleDir 'autolearn-auth.mjs'),
@@ -219,9 +245,17 @@ if ($cursorDeferred) {
     Write-Warning "MISSING: $observerRule"; $ok = $false
 }
 
+# Hooks are registered by --install (needs node/bun).
+$droidHooks = Join-Path $env:USERPROFILE '.factory\hooks.json'
+if ($droidDeferred) {
+    Write-Host "  DEFERRED: Droid hooks (no node/bun - run autolearn-droid.mjs --install)"
+} elseif (-not ((Test-Path $droidHooks) -and (Select-String -Path $droidHooks -Pattern 'autolearn-droid.mjs' -SimpleMatch -Quiet))) {
+    Write-Warning "MISSING: autolearn hooks in $droidHooks"; $ok = $false
+}
+
 Write-Host ""
 if ($ok) {
-    Write-Host "Done! Autolearn will activate on your next OpenCode, pi, or Cursor session." -ForegroundColor Green
+    Write-Host "Done! Autolearn will activate on your next OpenCode, pi, Cursor, or Droid session." -ForegroundColor Green
 } else {
     Write-Warning "Some files are missing - check the errors above."
     exit 1

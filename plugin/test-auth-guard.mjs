@@ -20,6 +20,9 @@ import {
   readAuthState,
   writeAuthState,
   nextAuthState,
+  classifyDroidDoctor,
+  droidAuthArgv,
+  resolveDroidAuth,
 } from "./autolearn-auth.mjs"
 
 // --- classification -------------------------------------------------------
@@ -151,6 +154,58 @@ test("probeAuth never throws when the spawn implementation throws", () => {
   const v = probeAuth(["agent", "status"], { spawn })
   assert.equal(v.ok, false)
   assert.match(v.reason, /^probe_failed:/)
+})
+
+// --- droid ----------------------------------------------------------------
+
+// Shape of `droid doctor --json --checks auth` observed on droid v1.1.0.
+const doctor = (status) => JSON.stringify({ ok: status === "pass", results: [
+  { id: "auth.credentials", category: "auth", status: "pass" },
+  { id: "auth.verify", category: "auth", status, detail: "authenticated via stored login session" },
+] })
+
+test("droidAuthArgv builds the doctor auth check", () => {
+  assert.deepEqual(droidAuthArgv("droid"), ["droid", "doctor", "--json", "--checks", "auth"])
+})
+
+test("classifyDroidDoctor passes only when auth.verify passes", () => {
+  assert.equal(classifyDroidDoctor(JSON.parse(doctor("pass"))).ok, true)
+  const fail = classifyDroidDoctor(JSON.parse(doctor("fail")))
+  assert.deepEqual([fail.ok, fail.reason], [false, "auth_verify_fail"])
+})
+
+test("classifyDroidDoctor rejects output without auth.verify or results", () => {
+  assert.equal(classifyDroidDoctor({ results: [{ id: "auth.credentials", status: "pass" }] }).reason, "auth_verify_missing")
+  assert.equal(classifyDroidDoctor({ ok: true }).reason, "unreadable_status")
+  assert.equal(classifyDroidDoctor(null).reason, "unreadable_status")
+})
+
+test("resolveDroidAuth short-circuits on FACTORY_API_KEY without spawning", () => {
+  let spawned = false
+  const spawn = () => { spawned = true; return { status: 0, stdout: "" } }
+  const v = resolveDroidAuth("droid", { env: { FACTORY_API_KEY: "fk" }, spawn })
+  assert.deepEqual([v.ok, v.source, spawned], [true, "env", false])
+})
+
+test("resolveDroidAuth ignores a blank key and probes the stored login", () => {
+  const seen = []
+  const spawn = (file, args) => { seen.push(args.join(" ")); return { status: 0, stdout: doctor("pass"), stderr: "" } }
+  const v = resolveDroidAuth("droid", { env: { FACTORY_API_KEY: "  " }, spawn, platform: "linux" })
+  assert.equal(v.ok, true)
+  assert.equal(seen[0], "doctor --json --checks auth")
+})
+
+test("resolveDroidAuth fails on a failing doctor, timeout or missing binary", () => {
+  const env = {}
+  assert.equal(resolveDroidAuth("droid", { env, spawn: () => ({ status: 1, stdout: doctor("fail"), stderr: "" }) }).ok, false)
+  assert.equal(resolveDroidAuth("droid", { env, spawn: () => ({ error: { code: "ETIMEDOUT" } }) }).reason, "probe_timeout")
+  assert.equal(resolveDroidAuth("droid", { env, spawn: () => ({ error: { code: "ENOENT" } }) }).reason, "binary_missing")
+  assert.equal(resolveDroidAuth("droid", { env, spawn: () => ({ status: 0, stdout: "warn: x" }) }).reason, "unparseable_status")
+})
+
+test("the Cursor probe still uses the Cursor classifier by default", () => {
+  const spawn = () => ({ status: 0, stdout: doctor("pass"), stderr: "" })
+  assert.equal(probeAuth(["agent", "status"], { spawn }).ok, false)
 })
 
 // --- dedupe ---------------------------------------------------------------

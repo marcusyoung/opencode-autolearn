@@ -1,6 +1,6 @@
 # agent-autolearn
 
-Self-improvement engine for coding agents. One enforced methodology, multiple harnesses: works with **OpenCode v1 (`opencode`)**, **OpenCode v2 beta (`opencode2`)**, **pi**, and **Cursor**, installed side by side. Learns from your conversations, captures corrections and preferences, and escalates behavioral rules so your coding agent improves over time.
+Self-improvement engine for coding agents. One enforced methodology, multiple harnesses: works with **OpenCode v1 (`opencode`)**, **OpenCode v2 beta (`opencode2`)**, **pi**, **Cursor**, and **Factory Droid**, installed side by side. Learns from your conversations, captures corrections and preferences, and escalates behavioral rules so your coding agent improves over time.
 
 <p align="center">
   <a href="https://www.linkedin.com/feed/update/urn:li:activity:7481434645415477248/">
@@ -16,6 +16,7 @@ Self-improvement engine for coding agents. One enforced methodology, multiple ha
 | OpenCode v2 (beta) | `plugin/autolearn-v2.js` | `~/.config/opencode/plugins/` | `instructions` entry in `opencode.json` | `opencode2 run` + HTTP session delete |
 | pi | `plugin/autolearn-pi.ts` | `~/.pi/agent/extensions/` | system-prompt section (diff-patched by pi) | `pi -p --no-session -na` (one-shot, ephemeral) |
 | Cursor | `plugin/autolearn-cursor.mjs` | `~/.cursor/` | always-applied rule (`~/.cursor/rules/`) | `agent -p --force` (transcript-driven local scan) |
+| Factory Droid | `plugin/autolearn-droid.mjs` | `~/.factory/autolearn/` | none (the `autolearn` skill is discovered from `~/.agents/skills/`) | `droid exec --auto medium` (Stop / SessionEnd / PreCompact hooks) |
 
 All adapters import one shared core (`plugin/autolearn-core.mjs`) that owns the methodology, so behavior is identical everywhere.
 
@@ -67,9 +68,10 @@ bash agent-autolearn/install.sh
 
 1. Copies `plugin/autolearn.js` (v1), `plugin/autolearn-v2.js` (v2), and `plugin/autolearn-core.mjs` (shared) to `~/.config/opencode/plugins/`, plus `plugin/autolearn-pi.ts` and the shared core to `~/.pi/agent/extensions/`
 2. Copies `plugin/autolearn-cursor.mjs` and the shared core to `~/.cursor/`, writes the always-applied observer rule (`~/.cursor/rules/autolearn-observer.mdc`), and registers (or prints) the recurring transcript scan job
-3. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
-4. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
-5. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
+3. Copies `plugin/autolearn-droid.mjs` and the shared core to `~/.factory/autolearn/` and registers its `Stop`, `SessionEnd` and `PreCompact` hooks in `~/.factory/hooks.json`
+4. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
+5. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
+6. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
 
 ### Verify
 
@@ -114,6 +116,14 @@ If you prefer to edit `~/.config/opencode/opencode.json` yourself, here is what 
 - **One skill change per review** (create OR patch), gated by a recurrence check — single-session patterns go to the wiki pattern notebook instead.
 - **Reviewer recursion guards**: `AUTOLEARN_REVIEWER=1` env var, agent-name and title matching, and buffer depth guard.
 - **Skill lifecycle**: curator transitions (stale at 30 days, archived at 90, pinned exempt); archives are never deleted.
+
+## Droid adapter notes
+
+- **Hook-driven.** `--install` appends one entry to `Stop`, `SessionEnd` and `PreCompact` in `~/.factory/hooks.json`, backing the file up first. Other tools' hooks are left alone, and `--install --remove` strips only entries that reference `autolearn-droid.mjs`.
+- **The hook never blocks a turn.** It reads the transcript named on stdin, prints nothing, always exits 0, and leaves the review to a detached `droid exec`.
+- **Cadence.** `Stop` reviews once per `review_threshold` genuine user messages; hook records, system reminders, tool results and harness notices are not counted. `PreCompact` and `SessionEnd` review whatever is still unreviewed, so turns about to be compacted are not lost.
+- **Auth preflight.** Before writing a review file it passes if `FACTORY_API_KEY` is set, otherwise it requires `droid doctor --json --checks auth` to report `auth.verify` as `pass`. A failure spawns nothing and logs one `auth_missing` observation (trigger `droid`) per distinct failure.
+- **Throttle is shared** with the other harnesses through `autolearn-core.mjs`.
 
 ## Cursor adapter notes
 
@@ -370,7 +380,7 @@ Autolearn records conversation excerpts locally to learn from them. By default *
 - All data lives under `~/.autolearn/` and `~/.agent-improvement/`.
 - Messages are redacted of likely secrets (API keys, tokens, passwords) before buffering.
 - The adapters and core CLI do not make outbound network requests. Sync is opt-in and E2E-encrypted: the adapter auto-pulls on session start and auto-pushes after reviews when `AUTOLEARN_SYNC_API_KEY` is set. Two interchangeable backends: **Fastify** (self-hosted, free, `sync-server/`) or **Convex** (managed, `sync-convex/`). See [`docs/high-level-design.md`](docs/high-level-design.md) Decisions 5–7.
-- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`, the two files from `~/.pi/agent/extensions/`, and the Cursor artefacts (`~/.cursor/autolearn-cursor.mjs`, `~/.cursor/autolearn-core.mjs`, `~/.cursor/autolearn-cursor-watch.ps1`, `~/.cursor/rules/autolearn-observer.mdc`, and the `AutoLearnCursorScan.lnk` Startup shortcut — run `node ~/.cursor/autolearn-cursor.mjs --schedule --remove` to remove the rule launcher and shortcut). Also remove the maintenance tasks: `node ~/.autolearn/bin/autolearn-schedule.mjs --remove`.
+- To wipe everything: `rm -rf ~/.autolearn ~/.agent-improvement` and remove the plugin/instructions entries from `~/.config/opencode/opencode.json`, the two files from `~/.pi/agent/extensions/`, and the Cursor artefacts (`~/.cursor/autolearn-cursor.mjs`, `~/.cursor/autolearn-core.mjs`, `~/.cursor/autolearn-cursor-watch.ps1`, `~/.cursor/rules/autolearn-observer.mdc`, and the `AutoLearnCursorScan.lnk` Startup shortcut — run `node ~/.cursor/autolearn-cursor.mjs --schedule --remove` to remove the rule launcher and shortcut), and the Droid hooks and `~/.factory/autolearn/` (run `node ~/.factory/autolearn/autolearn-droid.mjs --install --remove` first). Also remove the maintenance tasks: `node ~/.autolearn/bin/autolearn-schedule.mjs --remove`.
 
 ## Uninstall
 
@@ -391,6 +401,10 @@ rm -rf ~/.agents/skills/autolearn
 node ~/.cursor/autolearn-cursor.mjs --schedule --remove
 rm -f ~/.cursor/autolearn-cursor.mjs ~/.cursor/autolearn-core.mjs \
       ~/.cursor/rules/autolearn-observer.mdc
+
+# Droid: remove the autolearn hooks from ~/.factory/hooks.json, then the adapter.
+node ~/.factory/autolearn/autolearn-droid.mjs --install --remove
+rm -rf ~/.factory/autolearn
 
 # Maintenance schedule (curator + topics Task Scheduler / crontab entries)
 node ~/.autolearn/bin/autolearn-schedule.mjs --remove
