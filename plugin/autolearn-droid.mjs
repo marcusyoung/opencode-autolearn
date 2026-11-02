@@ -7,13 +7,16 @@
  * spawns a detached headless `droid exec` reviewer. It reuses autolearn-core's
  * config, formatReview, throttle and observation log.
  *
+ * Usage: node autolearn-droid.mjs --hook   (registered on Stop, SessionEnd, PreCompact)
+ *
  * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED, AUTOLEARN_DEBUG (as core),
  * plus AUTOLEARN_DROID_BIN (reviewer binary, default "droid").
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
-import { basename, join } from "path"
+import { basename, join, resolve } from "path"
+import { fileURLToPath } from "url"
 import * as core from "./autolearn-core.mjs"
 import { resolveDroidAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
 
@@ -232,3 +235,42 @@ export function reviewSession({ sessionId, transcriptPath, event = "Stop", cwd }
     return { status: "error" }
   }
 }
+
+/** Hook events that can trigger a review; every other event is ignored. */
+export const HOOK_EVENTS = new Set(["Stop", "SessionEnd", "PreCompact"])
+
+/**
+ * Handle one hook invocation from its raw stdin text. Never throws. Droid
+ * passes session_id, transcript_path, cwd and hook_event_name on stdin.
+ */
+export function handleHook(raw, deps = {}) {
+  let payload
+  try { payload = JSON.parse(String(raw || "")) } catch { return { status: "bad_payload" } }
+  if (!payload || typeof payload !== "object") return { status: "bad_payload" }
+  const event = payload.hook_event_name
+  if (!HOOK_EVENTS.has(event)) return { status: "ignored_event" }
+  return reviewSession({
+    sessionId: payload.session_id,
+    transcriptPath: payload.transcript_path,
+    cwd: payload.cwd,
+    event,
+  }, deps)
+}
+
+function readStdin() {
+  if (process.stdin.isTTY) return ""
+  try { return readFileSync(0, "utf-8") } catch { return "" }
+}
+
+function main(argv) {
+  if (argv.includes("--hook")) {
+    // A hook must never block or annotate a turn: no output, always exit 0.
+    try { core.dbg("droid hook", handleHook(readStdin())) } catch {}
+    return 0
+  }
+  console.log("Usage: autolearn-droid.mjs --hook")
+  return 0
+}
+
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) process.exit(main(process.argv.slice(2)))

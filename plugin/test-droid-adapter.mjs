@@ -9,6 +9,8 @@ import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
+import { spawnSync } from "child_process"
+import { fileURLToPath } from "url"
 
 // The adapter resolves its store from AUTOLEARN_HOME at import time.
 process.env.AUTOLEARN_HOME = mkdtempSync(join(tmpdir(), "al-droid-"))
@@ -262,4 +264,66 @@ test("launchReviewer marks the child as the reviewer and detaches it", () => {
   assert.equal(seen.opts.env.AUTOLEARN_REVIEWER, "1")
   assert.equal(seen.opts.unref, true)
   assert.equal(seen.opts.cwd, "/repo")
+})
+
+// --- hook entry point -----------------------------------------------------
+
+const ADAPTER = fileURLToPath(new URL("./autolearn-droid.mjs", import.meta.url))
+
+test("handleHook rejects malformed and non-object payloads", () => {
+  assert.equal(droid.handleHook("{nope").status, "bad_payload")
+  assert.equal(droid.handleHook("").status, "bad_payload")
+  assert.equal(droid.handleHook("42").status, "bad_payload")
+})
+
+test("handleHook ignores events other than Stop, SessionEnd and PreCompact", () => {
+  for (const e of ["SessionStart", "UserPromptSubmit", "PreToolUse", "Notification"]) {
+    assert.equal(droid.handleHook(JSON.stringify({ hook_event_name: e, session_id: "x", transcript_path: "/x" })).status, "ignored_event")
+  }
+})
+
+test("handleHook dispatches each review event with the payload fields", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("h1", 2)
+  const deps = { auth: () => ({ ok: true }), launch: () => {}, ensureStore: noStore }
+  const payload = (e) => JSON.stringify({ session_id: "h1", transcript_path: transcriptPath, cwd: "C:\\repo", permission_mode: "auto", hook_event_name: e })
+  assert.equal(droid.handleHook(payload("Stop"), deps).status, "not_due")
+  assert.equal(droid.handleHook(payload("PreCompact"), deps).status, "spawned")
+  assert.equal(droid.handleHook(payload("SessionEnd"), deps).status, "not_due")
+})
+
+function runHookProcess(stdin, env = {}) {
+  return spawnSync(process.execPath, [ADAPTER, "--hook"], {
+    input: stdin,
+    encoding: "utf8",
+    env: { ...process.env, AUTOLEARN_HOME: core.AL_HOME, ...env },
+    timeout: 20000,
+  })
+}
+
+test("--hook prints nothing and exits 0 for every input", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("h2", 2)
+  const inputs = [
+    "",
+    "{not json",
+    "[]",
+    JSON.stringify({ hook_event_name: "Notification" }),
+    JSON.stringify({ hook_event_name: "Stop", session_id: "h2", transcript_path: join(core.AL_HOME, "missing.jsonl") }),
+    JSON.stringify({ hook_event_name: "Stop", session_id: "h2", transcript_path: transcriptPath }),
+  ]
+  for (const input of inputs) {
+    const r = runHookProcess(input)
+    assert.equal(r.status, 0, `exit for ${input}`)
+    assert.equal(r.stdout, "", `stdout for ${input}`)
+    assert.equal(r.stderr, "", `stderr for ${input}`)
+  }
+})
+
+test("--hook does nothing when autolearn is disabled", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("h3", 6)
+  const r = runHookProcess(JSON.stringify({ hook_event_name: "Stop", session_id: "h3", transcript_path: transcriptPath }), { AUTOLEARN_DISABLED: "1" })
+  assert.equal(r.status, 0)
+  assert.deepEqual(reviews(), [])
 })
