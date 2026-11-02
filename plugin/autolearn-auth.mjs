@@ -89,7 +89,7 @@ export function buildProbeCommand(argv, platform = process.platform, comspec = p
  * the same way "known unauthenticated" does.
  */
 export function probeAuth(argv, opts = {}) {
-  const { timeoutMs = AUTH_TIMEOUT_MS, spawn = spawnSync } = opts
+  const { timeoutMs = AUTH_TIMEOUT_MS, spawn = spawnSync, classify = classifyAuthStatus } = opts
   if (!Array.isArray(argv) || !argv.length || !argv[0]) {
     return { ok: false, source: "unknown", reason: "binary_missing", raw: "" }
   }
@@ -114,7 +114,7 @@ export function probeAuth(argv, opts = {}) {
     const reason = (r && r.status === 0) ? "unparseable_status" : `status_exit_${r ? r.status : "null"}`
     return { ok: false, source: "unknown", reason, raw: stdout || stderr }
   }
-  const verdict = classifyAuthStatus(parsed)
+  const verdict = classify(parsed)
   return { ...verdict, raw: stdout.trim() }
 }
 
@@ -126,6 +126,40 @@ export function resolveAuth(bin, opts = {}) {
   const fromEnv = shortCircuitFromEnv(opts.env || process.env)
   if (fromEnv) return fromEnv
   return probeAuth(cursorAuthArgv(bin), opts)
+}
+
+// ---------------------------------------------------------------------------
+// Factory Droid: FACTORY_API_KEY first, then the stored login (decision doc-3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify `droid doctor --json --checks auth`. Only the `auth.verify` result
+ * is trusted: it is the check that exercises the credential `droid exec` uses.
+ */
+export function classifyDroidDoctor(parsed) {
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.results)) {
+    return { ok: false, source: "unknown", reason: "unreadable_status" }
+  }
+  const verify = parsed.results.find(r => r && r.id === "auth.verify")
+  if (!verify) return { ok: false, source: "login-store", reason: "auth_verify_missing" }
+  if (verify.status === "pass") return { ok: true, source: "login-store", reason: "auth.verify" }
+  return { ok: false, source: "login-store", reason: `auth_verify_${verify.status || "unknown"}` }
+}
+
+export function droidAuthArgv(bin) {
+  return [bin, "doctor", "--json", "--checks", "auth"]
+}
+
+/**
+ * Resolve whether `droid exec` will authenticate. A set FACTORY_API_KEY wins
+ * because droid prefers it; otherwise the stored login must pass doctor.
+ * Checking only the login when a key is present would test the wrong credential.
+ */
+export function resolveDroidAuth(bin = "droid", opts = {}) {
+  const env = opts.env || process.env
+  const key = typeof env.FACTORY_API_KEY === "string" ? env.FACTORY_API_KEY.trim() : ""
+  if (key) return { ok: true, source: "env", reason: "FACTORY_API_KEY" }
+  return probeAuth(droidAuthArgv(bin), { ...opts, classify: classifyDroidDoctor })
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync } from "fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
 
@@ -131,4 +131,135 @@ test("state round-trips and persists only the cursors", () => {
   droid.saveState("sess/1", { lastReviewUserMsg: 5, reviewedUpTo: 10, extra: "x" })
   assert.deepEqual(droid.loadState("sess/1"), { lastReviewUserMsg: 5, reviewedUpTo: 10 })
   assert.deepEqual(droid.loadState("missing"), {})
+})
+
+// --- review pipeline ------------------------------------------------------
+
+const core = await import("./autolearn-core.mjs")
+const authMod = await import("./autolearn-auth.mjs")
+
+function resetStore() {
+  rmSync(core.AL_HOME, { recursive: true, force: true })
+  mkdirSync(core.REVIEWS_DIR, { recursive: true })
+  // No spacing between reviews so each test controls admission itself.
+  writeFileSync(core.CONFIG_FILE, "review_threshold: 5\nmin_interval_ms: 0\nmax_reviews_per_day: 0\n")
+}
+
+function writeTranscript(name, turns) {
+  const dir = join(core.AL_HOME, "sessions")
+  mkdirSync(dir, { recursive: true })
+  const p = join(dir, `${name}.jsonl`)
+  writeFileSync(p, conversation(turns))
+  return p
+}
+
+const obs = () => existsSync(core.OBS_FILE)
+  ? readFileSync(core.OBS_FILE, "utf8").trim().split("\n").filter(Boolean).map(l => JSON.parse(l))
+  : []
+const reviews = () => readdirSync(core.REVIEWS_DIR).filter(f => f.startsWith("review-"))
+const noStore = () => {}
+
+test("failed auth writes no review file and records one auth_missing", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("a1", 5)
+  let launched = 0
+  const deps = { auth: () => ({ ok: false, source: "login-store", reason: "auth_verify_fail" }), launch: () => { launched++ }, ensureStore: noStore }
+  for (let i = 0; i < 3; i++) {
+    assert.equal(droid.reviewSession({ sessionId: "a1", transcriptPath, event: "Stop" }, deps).status, "auth_failed")
+  }
+  assert.equal(launched, 0)
+  assert.deepEqual(reviews(), [])
+  const missing = obs().filter(o => o.type === "auth_missing")
+  assert.equal(missing.length, 1)
+  assert.deepEqual([missing[0].trigger, missing[0].reason], ["droid", "auth_verify_fail"])
+  assert.equal(authMod.readAuthState().droid.state, "unauthenticated")
+  assert.deepEqual(droid.loadState("a1"), {})
+})
+
+test("auth is not probed when no review is due", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("a2", 2)
+  let probed = 0
+  const r = droid.reviewSession({ sessionId: "a2", transcriptPath }, { auth: () => { probed++; return { ok: true } }, launch: () => {}, ensureStore: noStore })
+  assert.equal(r.status, "not_due")
+  assert.equal(probed, 0)
+})
+
+test("auth ok spawns once, logs review_spawned and advances the cursors", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("a3", 5)
+  const calls = []
+  const deps = { auth: () => ({ ok: true, source: "env" }), launch: (a) => calls.push(a), ensureStore: noStore }
+  const first = droid.reviewSession({ sessionId: "a3", transcriptPath, event: "Stop" }, deps)
+  const again = droid.reviewSession({ sessionId: "a3", transcriptPath, event: "Stop" }, deps)
+  assert.equal(first.status, "spawned")
+  assert.equal(again.status, "not_due")
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].cwd, "C:\\repo")
+  assert.equal(reviews().length, 1)
+  const md = readFileSync(calls[0].reviewFile, "utf8")
+  assert.match(md, /Trigger: droid/)
+  assert.match(md, /question 5/)
+  const spawned = obs().filter(o => o.type === "review_spawned")
+  assert.deepEqual([spawned.length, spawned[0].project, spawned[0].trigger, spawned[0].event], [1, "repo", "droid", "Stop"])
+  assert.deepEqual(droid.loadState("a3"), { lastReviewUserMsg: 5, reviewedUpTo: 10 })
+})
+
+test("a throttled spawn leaves the cursors for the next hook", () => {
+  resetStore()
+  writeFileSync(core.CONFIG_FILE, "review_threshold: 5\nmin_interval_ms: 3600000\nmax_reviews_per_day: 0\n")
+  writeFileSync(core.THROTTLE_FILE, `${Date.now()}:other`)
+  const transcriptPath = writeTranscript("a4", 5)
+  const r = droid.reviewSession({ sessionId: "a4", transcriptPath }, { auth: () => ({ ok: true }), launch: () => {}, ensureStore: noStore })
+  assert.equal(r.status, "throttled")
+  assert.deepEqual(reviews(), [])
+  assert.deepEqual(droid.loadState("a4"), {})
+})
+
+test("the reviewer's own session is never reviewed", () => {
+  resetStore()
+  const dir = join(core.AL_HOME, "sessions")
+  mkdirSync(dir, { recursive: true })
+  const p = join(dir, "rv.jsonl")
+  writeFileSync(p, conversation(6).replace("question 1", "# Autolearn Review"))
+  const deps = { auth: () => ({ ok: true }), launch: () => { throw new Error("must not launch") }, ensureStore: noStore }
+  assert.equal(droid.reviewSession({ sessionId: "rv", transcriptPath: p }, deps).status, "reviewer_session")
+  process.env.AUTOLEARN_REVIEWER = "1"
+  try {
+    assert.equal(droid.reviewSession({ sessionId: "a5", transcriptPath: writeTranscript("a5", 6) }, deps).status, "reviewer_session")
+  } finally {
+    delete process.env.AUTOLEARN_REVIEWER
+  }
+})
+
+test("a launch failure keeps the review in a fallback file and does not advance", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("a6", 5)
+  const r = droid.reviewSession({ sessionId: "a6", transcriptPath }, { auth: () => ({ ok: true }), launch: () => { throw new Error("ENOENT") }, ensureStore: noStore })
+  assert.equal(r.status, "launch_failed")
+  assert.ok(readdirSync(core.AL_HOME).some(f => f.startsWith("review-failed-")))
+  assert.deepEqual(droid.loadState("a6"), {})
+})
+
+// --- reviewer launch ------------------------------------------------------
+
+test("reviewer argv runs droid exec headless with the review path", () => {
+  const argv = droid.reviewerArgv({ reviewFile: "/h/review-1.md", cwd: "/repo/" }, "linux")
+  assert.deepEqual(argv.slice(0, 6), ["droid", "exec", "--auto", "medium", "--cwd", "/repo"])
+  assert.match(argv[6], /review-1\.md/)
+  assert.ok(!argv[6].includes('"'), "hide-uv.vbs cannot carry double quotes")
+})
+
+test("reviewer argv routes through the hidden launcher on Windows", () => {
+  const argv = droid.reviewerArgv({ reviewFile: "C:\\r.md", cwd: "C:\\repo\\" }, "win32")
+  assert.deepEqual(argv.slice(0, 3), ["wscript.exe", core.HIDE_UV_VBS, "droid"])
+  assert.equal(argv[argv.indexOf("--cwd") + 1], "C:\\repo")
+})
+
+test("launchReviewer marks the child as the reviewer and detaches it", () => {
+  let seen
+  droid.launchReviewer({ reviewFile: "/r.md", cwd: "/repo" }, { spawn: (argv, opts) => { seen = { argv, opts } }, platform: "linux" })
+  assert.equal(seen.opts.env.AUTOLEARN_REVIEWER, "1")
+  assert.equal(seen.opts.unref, true)
+  assert.equal(seen.opts.cwd, "/repo")
 })

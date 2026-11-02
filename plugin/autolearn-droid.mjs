@@ -7,16 +7,20 @@
  * spawns a detached headless `droid exec` reviewer. It reuses autolearn-core's
  * config, formatReview, throttle and observation log.
  *
- * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED, AUTOLEARN_DEBUG (as core).
+ * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED, AUTOLEARN_DEBUG (as core),
+ * plus AUTOLEARN_DROID_BIN (reviewer binary, default "droid").
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "fs"
-import { join } from "path"
+import { homedir } from "os"
+import { basename, join } from "path"
 import * as core from "./autolearn-core.mjs"
+import { resolveDroidAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
 
 // Per-session cadence state lives under the persona dir, alongside reviews/.
 export const STATE_DIR = join(core.DEFAULT_PERSONA_DIR, "droid")
-
+export const REVIEWER_BIN = process.env.AUTOLEARN_DROID_BIN || "droid"
+export const FACTORY_HOME = join(homedir(), ".factory")
 // Harness notices Droid writes as user-role lines. They are not typed by the
 // user, so counting them would fire reviews on tool-heavy turns.
 const NOTICE_RES = [
@@ -124,4 +128,107 @@ export function planReview(messages, state = {}, { event = "Stop", threshold = c
   const slice = messages.slice(upTo)
   if (slice.length < 2 || !slice.some(m => m.role === "user")) return null
   return { slice, userCount, next: { lastReviewUserMsg: userCount, reviewedUpTo: messages.length } }
+}
+
+/**
+ * argv for the headless reviewer. On Windows it goes through the same
+ * WScript WindowStyle-0 launcher as `uv` (hide-uv.vbs), because windowsHide
+ * only covers the immediate child and droid's own children would flash a
+ * console. hide-uv.vbs wraps each argument in double quotes without escaping,
+ * so the prompt must contain none, and a trailing backslash on --cwd would
+ * escape its closing quote.
+ */
+export function reviewerArgv({ reviewFile, cwd }, platform = process.platform) {
+  const prompt = `The autolearn session review is the file at ${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
+  const args = [REVIEWER_BIN, "exec", "--auto", "medium"]
+  const dir = cwd ? String(cwd).replace(/[\\/]+$/, "") : ""
+  if (dir) args.push("--cwd", dir)
+  args.push(prompt)
+  return platform === "win32" ? ["wscript.exe", core.HIDE_UV_VBS, ...args] : args
+}
+
+export function launchReviewer({ reviewFile, cwd }, { spawn = core.spawnDetached, platform = process.platform } = {}) {
+  if (platform === "win32") {
+    try {
+      mkdirSync(join(process.env.USERPROFILE || "", ".local", "bin"), { recursive: true })
+      writeFileSync(core.HIDE_UV_VBS, core.HIDE_UV_VBS_CONTENT)
+    } catch (err) {
+      core.dbg("droid launchReviewer: hide-uv.vbs ensure failed", err.message)
+    }
+  }
+  // AUTOLEARN_REVIEWER marks the reviewer's own session so its hooks skip it.
+  const env = { ...process.env, AUTOLEARN_REVIEWER: "1" }
+  return spawn(reviewerArgv({ reviewFile, cwd }, platform), { cwd: cwd || FACTORY_HOME, env, unref: true })
+}
+
+/**
+ * Review one Droid session if a review is due. Never throws.
+ *
+ * Order matters: cadence first (cheap, no I/O beyond the transcript), then the
+ * auth preflight, then the throttle, and only then is a review file written.
+ * A failed preflight therefore leaves no orphan review file and consumes no
+ * throttle window, and the cursors advance only on an admitted spawn.
+ *
+ * `deps` exists for tests: auth, launch, ensureStore.
+ */
+export function reviewSession({ sessionId, transcriptPath, event = "Stop", cwd } = {}, deps = {}) {
+  const {
+    auth = () => resolveDroidAuth(REVIEWER_BIN),
+    launch = launchReviewer,
+    ensureStore = core.ensureStore,
+  } = deps
+  try {
+    if (process.env.AUTOLEARN_DISABLED === "1") return { status: "disabled" }
+    if (process.env.AUTOLEARN_REVIEWER === "1") return { status: "reviewer_session" }
+    if (!sessionId || !transcriptPath) return { status: "no_transcript" }
+    let text
+    try { text = readFileSync(transcriptPath, "utf-8") } catch { return { status: "no_transcript" } }
+    // Depth guard: never review a transcript that contains review content,
+    // which is the reviewer's own session if the env marker did not reach it.
+    if (text.includes(core.REVIEW_HEADING)) return { status: "reviewer_session" }
+
+    const parsed = parseDroidTranscript(text)
+    ensureStore()
+    const config = core.parseConfig()
+    const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
+    const plan = planReview(parsed.messages, loadState(sessionId), { event, threshold })
+    if (!plan) return { status: "not_due" }
+
+    const verdict = auth()
+    const gate = nextAuthState(readAuthState(), verdict, new Date(), "droid")
+    writeAuthState(gate.states)
+    if (gate.record) {
+      core.logObs({ type: "auth_missing", trigger: "droid", source: verdict.source, reason: verdict.reason })
+    }
+    if (!verdict.ok) return { status: "auth_failed", reason: verdict.reason }
+
+    const sessionCwd = parsed.cwd || cwd || ""
+    const project = sessionCwd ? basename(sessionCwd.replace(/[\\/]+$/, "")) : "unknown"
+    const reviewMd = core.formatReview(plan.slice, { project, trigger: "droid" })
+    // Peek, then commit only when a spawn will actually happen.
+    if (!core.throttleCheck(reviewMd, false)) return { status: "throttled" }
+    if (!core.throttleCheck(reviewMd, true)) return { status: "throttled" }
+
+    const reviewFile = join(core.REVIEWS_DIR, `review-${Date.now()}.md`)
+    try {
+      mkdirSync(core.REVIEWS_DIR, { recursive: true })
+      writeFileSync(reviewFile, reviewMd)
+    } catch (err) {
+      core.dbg("droid review: write failed", err.message)
+      return { status: "write_failed" }
+    }
+    try {
+      launch({ reviewFile, cwd: sessionCwd })
+    } catch (err) {
+      core.dbg("droid review: launch failed", err.message)
+      try { writeFileSync(join(core.AL_HOME, `review-failed-${Date.now()}.md`), reviewMd) } catch {}
+      return { status: "launch_failed" }
+    }
+    core.logObs({ type: "review_spawned", review_file: reviewFile, message_count: plan.slice.length, project, trigger: "droid", event })
+    saveState(sessionId, plan.next)
+    return { status: "spawned", reviewFile }
+  } catch (err) {
+    core.dbg("droid review error", err && err.message)
+    return { status: "error" }
+  }
 }
