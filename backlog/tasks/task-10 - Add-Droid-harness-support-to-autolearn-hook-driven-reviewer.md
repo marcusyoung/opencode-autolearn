@@ -1,11 +1,11 @@
 ---
 id: TASK-10
 title: Add Droid harness support to autolearn (hook-driven reviewer)
-status: In Progress
+status: Done
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:48:00Z'
+updated_date: '2026-11-02T19:53:00Z'
 labels: []
 dependencies: []
 references:
@@ -32,10 +32,10 @@ Droid (Factory) already picks up the shared autolearn skill from ~/.agents/skill
 - [x] #4 Review cadence is idempotent across repeated Stop firings: the absolute user-message count is recomputed per session and only lastReviewUserMsg and reviewedUpTo are persisted, so a threshold crossing fires exactly once.
 - [x] #5 PreCompact reviews the unreviewed slice before compaction, so turns that would be summarized away are still reviewed.
 - [x] #6 The adapter reuses core.throttleCheck (peek, then commit on the actual spawn) so min_interval_ms, max_reviews_per_day and identical-content dedupe stay shared with the other harnesses.
-- [ ] #7 The reviewer is spawned detached via droid exec against the review file, hidden on Windows so no console flashes, with AUTOLEARN_REVIEWER=1 so the reviewer own session is never reviewed.
+- [x] #7 The reviewer is spawned detached via droid exec against the review file, hidden on Windows so no console flashes, with AUTOLEARN_REVIEWER=1 so the reviewer own session is never reviewed.
 - [x] #8 An auth preflight runs before any file is written: it passes when FACTORY_API_KEY is set, otherwise requires `droid doctor --json --checks auth` to report auth.verify as pass, and on failure records one deduped auth_missing observation instead of leaving an orphan review file.
 - [x] #9 Hook registration is idempotent and additive: it preserves the existing SessionStart, UserPromptSubmit, Stop and Notification hooks in ~/.factory/hooks.json, and a remove mode reverses only the autolearn entries.
-- [ ] #10 README gains a Droid row in the harness support table, and deploy/windows/install-windows.ps1 registers the hooks during install.
+- [x] #10 README gains a Droid row in the harness support table, and deploy/windows/install-windows.ps1 registers the hooks during install.
 - [x] #11 End to end, a Droid session that crosses review_threshold produces review_spawned and review_complete in personas/default/observations.jsonl.
 <!-- AC:END -->
 
@@ -99,3 +99,23 @@ Rows 2-5 done. Row 2: probeAuth gained an optional classify option (Cursor defau
 
 Row 6 end to end (2026-11-02): deployed to ~/.factory/autolearn, --install registered Stop/SessionEnd/PreCompact in live hooks.json (backup hooks.json.autolearn-2026-11-02T19-40-49-115Z.bak). Scratch session a4a79162 in %TEMP%\al-e2e: turns 1-9 with AUTOLEARN_DISABLED=1 (hooks logged status disabled, proving hook processes inherit the caller env); turn 10 Stop -> spawned review-1793648641798.md, SessionEnd -> not_due; observations.jsonl gained review_spawned (trigger droid) 19:44:01 and review_complete 19:45:28. Reviewer session 3860f6f0 ran uv run autolearn.py/improve.py commands with no permission denials under --auto medium; its own hooks returned reviewer_session. Auth state droid=ok source login-store (FACTORY_API_KEY absent in the exec shell). Still unverified: whether hooks started by the Desktop app receive FACTORY_API_KEY; no console flash (not visually observable by the agent); full install-windows.ps1 run (parse-checked only).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added a hook-driven Factory Droid adapter (plugin/autolearn-droid.mjs) so Droid sessions feed the autolearn reviewer like the other harnesses.
+
+What changed:
+- Parser for ~/.factory/sessions transcripts: counts typed user messages (userMessageSource tag; untagged droid exec prompts pass an exclusion filter for hook records, reminders, tool results and harness notices).
+- Idempotent cadence: Stop reviews once per review_threshold user messages; PreCompact and SessionEnd review any unreviewed slice. Only lastReviewUserMsg/reviewedUpTo are persisted, advanced on an admitted spawn.
+- Auth preflight per doc-3: resolveDroidAuth in autolearn-auth.mjs (FACTORY_API_KEY, else droid doctor auth.verify=pass); probeAuth gained an optional classifier, Cursor path unchanged. Failures write nothing and log one deduped auth_missing.
+- Detached hidden droid exec --auto medium reviewer with AUTOLEARN_REVIEWER=1, plus REVIEW_HEADING depth guard; shared core throttle.
+- --hook entry (always exit 0, no output) and --install [--remove] for additive, reversible hooks.json registration with backup.
+- install-windows.ps1 step [3/8] + verify; README harness row, notes, uninstall.
+
+Deviation: parser rule refined from real transcripts (userMessageSource), recorded in notes.
+
+Verification: 78/78 node --test (droid adapter 34, auth guard 35, schedule health 9). Live: scratch session crossing review_threshold=10 logged review_spawned (droid) and review_complete; reviewer hooks skipped its own session; no console flash seen by the user; full install-windows.ps1 run exit 0.
+
+Follow-ups/risks: unverified whether Desktop-launched hooks receive FACTORY_API_KEY (auth state source will show it on the first due review); hook subprocess tests rewrite ~/.local/bin/hide-uv.vbs with identical content; README lint skipped (no markdownlint CLI).
+<!-- SECTION:FINAL_SUMMARY:END -->
