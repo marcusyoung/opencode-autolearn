@@ -347,7 +347,7 @@ Exit codes are part of the contract, because Task Scheduler only records a numbe
 
 The `topics` job runs the pure-Python `topics scan` and then the health check, so the existing daily task turns red (`4`) if the reviewer pipeline dies — no third scheduled task. `--run health` runs that check alone.
 
-On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `autolearn-job-*.cmd` (no console host at the root; runs allowed on battery). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`agent`, then `pi`, then `opencode2`/`opencode`) and pinned by absolute path in the job launcher; override with `AUTOLEARN_CURATOR_BIN`.
+On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `autolearn-job-*.cmd` (no console host at the root; runs allowed on battery). Times are **local machine time** — keep the host on Europe/London (or matching offset) to align with the previous OpenChamber 13:00 Europe/London slot. The curator harness is auto-detected (`droid`, then `agent`, then `pi`, then `opencode2`/`opencode`) and pinned by absolute path in the job launcher; override with `AUTOLEARN_CURATOR_BIN`.
 
 `curator_interval_days` in `~/.autolearn/personas/default/config.yaml` is **not** read by `curator run` and does not throttle the OS schedule — wall-clock frequency is controlled only by the Task Scheduler / crontab entries above.
 

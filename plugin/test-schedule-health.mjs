@@ -11,9 +11,9 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { basename, join } from "path"
 
-import { checkPipelineHealth, isCursorCuratorBin } from "./autolearn-schedule.mjs"
+import { checkPipelineHealth, isCursorCuratorBin, isDroidCuratorBin, resolveCuratorArgv, CURATOR_PROMPT } from "./autolearn-schedule.mjs"
 
 const HOUR = 3600 * 1000
 
@@ -64,6 +64,54 @@ test("isCursorCuratorBin recognizes only Cursor CLI names", () => {
   assert.equal(isCursorCuratorBin("opencode"), false)
   assert.equal(isCursorCuratorBin("opencode2.exe"), false)
   assert.equal(isCursorCuratorBin(""), false)
+})
+
+test("isDroidCuratorBin recognizes only the droid binary", () => {
+  assert.equal(isDroidCuratorBin("droid"), true)
+  assert.equal(isDroidCuratorBin("C:\\Users\\me\\bin\\droid.exe"), true)
+  assert.equal(isDroidCuratorBin("agent"), false)
+  assert.equal(isDroidCuratorBin(""), false)
+})
+
+function withCuratorEnv(env, fn) {
+  const keys = ["PATH", "AUTOLEARN_CURATOR_BIN", "AUTOLEARN_CURSOR_AGENT"]
+  const saved = Object.fromEntries(keys.map(k => [k, process.env[k]]))
+  try {
+    for (const k of keys) delete process.env[k]
+    Object.assign(process.env, env)
+    return fn()
+  } finally {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+  }
+}
+
+function fakeBins(names) {
+  const dir = mkdtempSync(join(tmpdir(), "al-bins-"))
+  for (const n of names) writeFileSync(join(dir, n), "")
+  return dir
+}
+
+test("auto-detect prefers droid over the Cursor CLI", () => {
+  const ext = process.platform === "win32" ? ".exe" : ""
+  const dir = fakeBins([`droid${ext}`, `agent${ext}`])
+  const argv = withCuratorEnv({ PATH: dir }, () => resolveCuratorArgv())
+  assert.equal(basename(argv[0]).toLowerCase(), `droid${ext}`)
+  assert.deepEqual(argv.slice(1, 4), ["exec", "--auto", "medium"])
+  assert.equal(argv[argv.length - 1], CURATOR_PROMPT)
+})
+
+test("auto-detect falls back to the Cursor CLI without droid", () => {
+  const ext = process.platform === "win32" ? ".exe" : ""
+  const dir = fakeBins([`agent${ext}`])
+  const argv = withCuratorEnv({ PATH: dir }, () => resolveCuratorArgv())
+  assert.deepEqual(argv.slice(1), ["-p", "--force", CURATOR_PROMPT])
+})
+
+test("droid curator prompt carries no double quotes for hide-run-wait.vbs", () => {
+  assert.ok(!CURATOR_PROMPT.includes('"'))
 })
 
 test("spawns with no completion are stale", () => {

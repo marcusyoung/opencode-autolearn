@@ -15,14 +15,14 @@
  * Proposals scan is intentionally NOT scheduled: `curator run` (invoked by the
  * curator agent) already embeds proposer.scan → verify → promote.
  *
- * Exit codes: 0 ok, 1 spawn/harness failure, 2 usage, 3 Cursor CLI not
- * authenticated, 4 reviews spawning but not completing.
+ * Exit codes: 0 ok, 1 spawn/harness failure, 2 usage, 3 curator harness
+ * (Droid or Cursor CLI) not authenticated, 4 reviews spawning but not completing.
  *
  * Windows launches go through a wait-capable WindowStyle-0 VBS wrapper so the
  * Task Scheduler process stays hidden and still waits for completion.
  *
  * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED (as core), plus:
- *   AUTOLEARN_CURATOR_BIN   - explicit curator binary (agent|pi|opencode|opencode2)
+ *   AUTOLEARN_CURATOR_BIN   - explicit curator binary (droid|agent|pi|opencode|opencode2)
  *   AUTOLEARN_CURSOR_AGENT  - alias for AUTOLEARN_CURATOR_BIN (Cursor installs)
  */
 
@@ -39,7 +39,7 @@ import { basename, dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
 import { spawnSync } from "child_process"
 import * as core from "./autolearn-core.mjs"
-import { resolveAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
+import { resolveAuth, resolveDroidAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
 
 export const SCHEDULE_DIR = join(core.AL_HOME, "bin")
 export const MODULE_INSTALL_NAME = "autolearn-schedule.mjs"
@@ -137,24 +137,33 @@ function ensureInstalledCopy() {
   }
 }
 
+function binBase(bin) {
+  return basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+}
+
 /** Cursor CLI harnesses that authenticate via resolveAuth; pi/opencode* do not. */
 export function isCursorCuratorBin(bin) {
   if (!bin) return false
-  const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+  const base = binBase(bin)
   return base === "agent" || base === "cursor-agent"
+}
+
+/** Factory Droid, which authenticates via resolveDroidAuth. */
+export function isDroidCuratorBin(bin) {
+  return Boolean(bin) && binBase(bin) === "droid"
 }
 
 /**
  * Resolve which harness runs the curator prompt.
  * Preference: AUTOLEARN_CURATOR_BIN / AUTOLEARN_CURSOR_AGENT, else first of
- * agent → pi → opencode2 → opencode found on PATH (via core.harnessBinEnv).
+ * droid → agent → pi → opencode2 → opencode found on PATH (via core.harnessBinEnv).
  * Returns argv for spawn, or null if nothing compatible is installed.
  */
 export function curatorBin() {
   const override = process.env.AUTOLEARN_CURATOR_BIN || process.env.AUTOLEARN_CURSOR_AGENT || ""
   let bin = override.trim()
   if (bin) return resolveExecutable(bin)
-  const env = core.harnessBinEnv("agent", ["pi", "opencode2", "opencode"])
+  const env = core.harnessBinEnv("droid", ["agent", "pi", "opencode2", "opencode"])
   return env.AUTOLEARN_HARNESS_BIN ? resolveExecutable(env.AUTOLEARN_HARNESS_BIN) : null
 }
 
@@ -162,7 +171,10 @@ export function resolveCuratorArgv() {
   const bin = curatorBin()
   if (!bin) return null
 
-  const base = basename(bin).replace(/\.(cmd|exe|bat)$/i, "").toLowerCase()
+  const base = binBase(bin)
+  if (base === "droid") {
+    return [bin, "exec", "--auto", "medium", "--cwd", core.AL_HOME, CURATOR_PROMPT]
+  }
   if (base === "agent" || base === "cursor-agent") {
     return [bin, "-p", "--force", CURATOR_PROMPT]
   }
@@ -261,7 +273,7 @@ export function installSchedule() {
       return {
         ok: false,
         crontab: crontabLines(),
-        stderr: "No curator harness found (agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN before installing crontab lines that run --run curator.",
+        stderr: "No curator harness found (droid/agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN before installing crontab lines that run --run curator.",
       }
     }
     return {
@@ -276,7 +288,7 @@ export function installSchedule() {
   if (!curator) {
     return {
       ok: false,
-      stderr: "No curator harness found (agent/pi/opencode2/opencode). Install one or set AUTOLEARN_CURATOR_BIN, then re-run --install.",
+      stderr: "No curator harness found (droid/agent/pi/opencode2/opencode). Install one or set AUTOLEARN_CURATOR_BIN, then re-run --install.",
     }
   }
 
@@ -413,23 +425,25 @@ export function runJob(job) {
     // windowless launcher discards its stderr and Task Scheduler only records a
     // bare failure. Refusing here turns that into an identifyable exit code.
     const bin = curatorBin()
-    // resolveAuth probes the Cursor CLI only; pi/opencode* curators have no
-    // Cursor login and must not be blocked by a failed agent status probe.
-    if (bin && isCursorCuratorBin(bin)) {
-      const auth = resolveAuth(bin)
+    // pi/opencode* curators have no probeable login and must not be blocked.
+    const droid = isDroidCuratorBin(bin)
+    if (droid || isCursorCuratorBin(bin)) {
+      const auth = droid ? resolveDroidAuth(bin) : resolveAuth(bin)
       const gate = nextAuthState(readAuthState(), auth, new Date(), "curator")
       writeAuthState(gate.states)
       if (gate.record) {
         core.logObs({ type: "auth_missing", trigger: "curator", source: auth.source, reason: auth.reason })
       }
       if (!auth.ok) {
-        console.error(`autolearn curator: Cursor CLI not authenticated (${auth.reason}); run 'agent login' or set CURSOR_API_KEY`)
+        console.error(droid
+          ? `autolearn curator: Droid not authenticated (${auth.reason}); run 'droid' to log in or set FACTORY_API_KEY`
+          : `autolearn curator: Cursor CLI not authenticated (${auth.reason}); run 'agent login' or set CURSOR_API_KEY`)
         return 3
       }
     }
     argv = resolveCuratorArgv()
     if (!argv) {
-      console.error("No curator harness found (agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN.")
+      console.error("No curator harness found (droid/agent/pi/opencode2/opencode). Set AUTOLEARN_CURATOR_BIN.")
       return 1
     }
   } else if (job === "topics") {
