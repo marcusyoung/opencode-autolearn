@@ -1,9 +1,11 @@
 ---
 id: TASK-10.1
 title: Prevent normal sessions from being mistaken for autolearn reviewers
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - Droid
 created_date: '2026-11-02T23:57:00Z'
+updated_date: '2026-11-02T23:58:00Z'
 labels: []
 dependencies: []
 references:
