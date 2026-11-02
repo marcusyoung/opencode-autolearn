@@ -5,12 +5,14 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:08:00Z'
+updated_date: '2026-11-02T19:12:00Z'
 labels: []
 dependencies: []
 references:
   - https://docs.factory.ai/reference/hooks-reference
   - plugin/autolearn-cursor.mjs
+documentation:
+  - backlog/decisions/doc-3 - droid-auth-preflight.md
 priority: high
 type: feature
 ordinal: 10000
@@ -31,7 +33,7 @@ Droid (Factory) already picks up the shared autolearn skill from ~/.agents/skill
 - [ ] #5 PreCompact reviews the unreviewed slice before compaction, so turns that would be summarized away are still reviewed.
 - [ ] #6 The adapter reuses core.throttleCheck (peek, then commit on the actual spawn) so min_interval_ms, max_reviews_per_day and identical-content dedupe stay shared with the other harnesses.
 - [ ] #7 The reviewer is spawned detached via droid exec against the review file, hidden on Windows so no console flashes, with AUTOLEARN_REVIEWER=1 so the reviewer own session is never reviewed.
-- [ ] #8 An auth preflight checks FACTORY_API_KEY before any file is written and records one deduped auth_missing observation, instead of leaving an orphan review file that looks like a completed run.
+- [ ] #8 An auth preflight runs before any file is written: it passes when FACTORY_API_KEY is set, otherwise requires `droid doctor --json --checks auth` to report auth.verify as pass, and on failure records one deduped auth_missing observation instead of leaving an orphan review file.
 - [ ] #9 Hook registration is idempotent and additive: it preserves the existing SessionStart, UserPromptSubmit, Stop and Notification hooks in ~/.factory/hooks.json, and a remove mode reverses only the autolearn entries.
 - [ ] #10 README gains a Droid row in the harness support table, and deploy/windows/install-windows.ps1 registers the hooks during install.
 - [ ] #11 End to end, a Droid session that crosses review_threshold produces review_spawned and review_complete in personas/default/observations.jsonl.
@@ -90,4 +92,8 @@ Single branch task/TASK-10 from main with one commit per manifest row; one PR to
 - docs.factory.com/harness/hooks: "Hooks run automatically with your local environment and credentials" and "hooks inherit your local environment". Whether FACTORY_API_KEY survives into hook processes is unverified (it is stripped from tool-call shells).
 - Verified locally: with FACTORY_API_KEY absent, `droid doctor --json --checks auth` exits 0 in ~0.6 s, makes no model call, and returns top-level "ok": true plus result id "auth.verify" status "pass" ("authenticated ... via stored login session").
 - Proposed preflight, mirroring the Cursor pattern (CURSOR_API_KEY short-circuit, then `agent status --format json`): pass if FACTORY_API_KEY is set; otherwise run `droid doctor --json --checks auth` and require auth.verify status "pass". Any timeout, non-JSON output or other status blocks the spawn and records one deduped auth_missing. Implemented as a resolveDroidAuth helper in autolearn-auth.mjs reusing probeAuth's spawn/timeout handling.
+
+## Decisions accepted (2026-11-02)
+- Auth preflight: FACTORY_API_KEY if set, else `droid doctor --json --checks auth` must report auth.verify pass (decision doc droid-auth-preflight). AC #8 reworded to match.
+- The Droid auth helper (resolveDroidAuth) goes in plugin/autolearn-auth.mjs with tests in plugin/test-auth-guard.mjs. Manifest row 2 Files therefore become: plugin/autolearn-droid.mjs, plugin/autolearn-auth.mjs, plugin/test-auth-guard.mjs, plugin/test-droid-adapter.mjs.
 <!-- SECTION:PLAN:END -->
