@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:13:00Z'
+updated_date: '2026-11-02T19:30:00Z'
 labels: []
 dependencies: []
 references:
@@ -89,3 +89,9 @@ Single branch task/TASK-10 from main with one commit per manifest row; one PR to
 | 5 | Wire installer and README | deploy/windows/install-windows.ps1, README.md | 4 | infra | install-windows.ps1 deploys the adapter and registers the hooks, and README lists a Droid row in the harness table |
 | 6 | Verify end to end | (no code) | 5 | test | A real Droid session crossing review_threshold logs review_spawned and review_complete in personas/default/observations.jsonl |
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Row 1 done (parser + cadence). Plan refinement from real transcripts: typed user lines carry message.userMessageSource (e.g. desktop); droid exec prompts carry none, so untagged lines fall back to the exclusion filter, extended with harness notices 'Request interrupted by user', 'Background task completed.', '/<cmd> is running'. Verified on real sessions: 15/7/1 user messages match the typed counts exactly. Real session dir slug has a leading dash (-C-Users-...); the hook uses transcript_path so the slug is not reconstructed. Cursors clamp (not reset) if a transcript shrinks.
+<!-- SECTION:NOTES:END -->
