@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - Droid
 created_date: '2026-11-02T23:57:00Z'
-updated_date: '2026-11-02T23:58:00Z'
+updated_date: '2026-11-02T23:59:00Z'
 labels: []
 dependencies: []
 references:
@@ -32,3 +32,48 @@ Normal coding sessions can be silently skipped when their transcripts contain th
 - [ ] #4 The corrected reviewer classification applies consistently to the Droid and Cursor transcript-driven adapters.
 - [ ] #5 Regression tests demonstrate both genuine reviewer exclusion and normal-session review eligibility, while existing cadence and deduplication tests remain passing.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+## Goal and scope
+Fix false reviewer classification in the Droid and Cursor transcript adapters only. Retain AUTOLEARN_REVIEWER=1 and replace the whole-transcript heading test with an anchored check of the first parsed user message. No authentication, cadence, state schema, installer, hook-registration, or OpenCode/pi behavior changes.
+
+## Verified current state
+- Droid reviewSession checks the environment marker, then scans raw JSONL for REVIEW_HEADING before parseDroidTranscript.
+- Cursor scan scans raw JSONL for REVIEW_HEADING before parseTranscript; it currently has no reviewer environment early return.
+- Both launchers generate the same prompt beginning "The autolearn session review is the file at ".
+- Droid's parser already removes hook records, tool results, and harness notices while retaining untagged exec prompts. Cursor's parser extracts user/assistant text blocks.
+- plugin/test-droid-adapter.mjs currently asserts that a first-user heading alone means reviewer_session. Replace that outdated expectation.
+- History: the raw guard was introduced with Cursor in e117872 and Droid in b94deea. There is no known-good version of either adapter without it, so describe this as an original false-positive bug rather than a demonstrated regression.
+- A filename lookup for dedicated Cursor/core test files returned no matches. Add a focused Cursor adapter test file rather than assume coverage.
+- Graph query returned no symbols; source reads and git history are the evidence. Coverage metadata reported metadata_changed; full re-index completed successfully.
+
+## Implementation
+1. Add REVIEWER_PROMPT_PREFIX and a small pure isReviewerSession(messages) helper to plugin/autolearn-core.mjs. Find the first role=user message and use content.startsWith(REVIEWER_PROMPT_PREFIX). Do not scan other messages or use includes. Empty/no-user input returns false.
+2. Use the shared prefix in both existing reviewer launch prompt strings without changing their rendered text or argv.
+3. Droid: preserve the existing environment-marker early return. Parse once, then apply the helper to parsed.messages before ensureStore/auth/throttle/state changes. Remove the raw heading guard.
+4. Cursor: add a reviewer environment-marker early return alongside the disabled check, returning the existing zero-count result. Parse each transcript once and apply the helper before per-conversation cadence/state/throttle processing. This does not identify individual transcripts from another process's environment: the prompt fallback is essential because the persistent watcher is separate from the reviewer.
+5. For isolated Cursor scan-level tests, add optional auth, launch, and ensureStore dependency overrides following Droid's existing deps pattern. scan() callers and result shape remain compatible. Production defaults retain existing behavior.
+6. Update the Droid regression tests and add plugin/test-cursor-adapter.mjs. Use synthetic JSONL, temporary AUTOLEARN_HOME/PROJECTS directories, mocked auth/launch/store setup, and no real reviewer, network, credentials, or live hook/config changes.
+
+## Validation
+- Before editing production guards, demonstrate the false positive with a normal threshold-eligible synthetic transcript containing the heading in tool output and assert that a genuine first-prompt reviewer without a heading is also mishandled by the old guard.
+- Cover both adapters: environment marker; exact first-user prefix; heading alone in the first user message; heading/prefix in assistant text, tool results, or later user messages; prefix quoted mid-message; no user messages. Droid fixtures include notices/hooks before the first genuine user message and an untagged exec prompt.
+- Assert genuine reviewers do not launch or advance cadence state. Assert normal contaminated sessions actually spawn once, write a review, advance state, and do not spawn again on unchanged input.
+- Verify generated launcher prompts still begin with the shared prefix, guarding against producer/detector drift.
+- Run node --test plugin/test-droid-adapter.mjs plugin/test-cursor-adapter.mjs plugin/test-auth-guard.mjs, then the repository's existing plugin test files using the discovered test inventory. Run node --check on changed modules and git diff --check.
+- No live deployment, watcher restart, install, commit, or PR during the planning phase. Deployment is separate from proving the repository fix.
+
+## Compatibility and risks
+- Intentional behavior change: a heading alone no longer excludes a session. A first genuine user message beginning with the generated reviewer prefix does.
+- The fallback is narrow identification, not an authentication/security boundary. A user deliberately starting with that exact prefix is classified as a reviewer.
+- No breaking external interfaces or state migrations. Cursor's optional test dependencies are additive.
+- Keep parser filtering unchanged; this task does not broaden notice detection or fix unrelated parser robustness.
+- One focused task/PR; no additional decomposition required. Before implementation, inspect any existing TASK-10 integration branch/PR as required by the dotted-task branching workflow.
+
+## Task Manifest
+| # | Title | Files | Depends On | Labels | Acceptance Criterion |
+|---|---|---|---|---|---|
+| 1 | Narrow reviewer detection in both transcript adapters and add regression coverage | plugin/autolearn-core.mjs, plugin/autolearn-droid.mjs, plugin/autolearn-cursor.mjs, plugin/test-droid-adapter.mjs, plugin/test-cursor-adapter.mjs | — | logic, test | Both adapters reject genuine reviewers but admit normal sessions containing review text, with isolated regression tests and existing plugin checks passing. |
+<!-- SECTION:PLAN:END -->
