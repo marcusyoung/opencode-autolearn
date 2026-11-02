@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:30:00Z'
+updated_date: '2026-11-02T19:38:00Z'
 labels: []
 dependencies: []
 references:
@@ -94,4 +94,6 @@ Single branch task/TASK-10 from main with one commit per manifest row; one PR to
 
 <!-- SECTION:NOTES:BEGIN -->
 Row 1 done (parser + cadence). Plan refinement from real transcripts: typed user lines carry message.userMessageSource (e.g. desktop); droid exec prompts carry none, so untagged lines fall back to the exclusion filter, extended with harness notices 'Request interrupted by user', 'Background task completed.', '/<cmd> is running'. Verified on real sessions: 15/7/1 user messages match the typed counts exactly. Real session dir slug has a leading dash (-C-Users-...); the hook uses transcript_path so the slug is not reconstructed. Cursors clamp (not reset) if a transcript shrinks.
+
+Rows 2-5 done. Row 2: probeAuth gained an optional classify option (Cursor default unchanged); resolveDroidAuth + classifyDroidDoctor added; reviewSession orders cadence -> auth -> throttle -> write -> spawn. Row 3: --hook always exit 0, no stdout/stderr, verified by subprocess tests. Row 4: registration round-trips a copy of the live hooks.json byte-identically. Row 5: installer step [3/8] + verify; README row, notes, uninstall. Tests: 78/78 (test-droid-adapter 34, test-auth-guard 35, test-schedule-health 9). No markdownlint CLI installed, README lint skipped. Note: the hook subprocess tests run core.ensureStore, which rewrites ~/.local/bin/hide-uv.vbs with identical content.
 <!-- SECTION:NOTES:END -->
