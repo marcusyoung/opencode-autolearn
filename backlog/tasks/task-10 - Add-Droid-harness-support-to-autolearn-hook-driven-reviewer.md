@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:03:00Z'
+updated_date: '2026-11-02T19:08:00Z'
 labels: []
 dependencies: []
 references:
@@ -84,4 +84,10 @@ Single branch task/TASK-10 from main with one commit per manifest row; one PR to
 | 4 | Add idempotent hook registration and removal | plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | 3 | infra, test | --install twice yields one autolearn entry per event with all foreign hooks intact, and --install --remove restores the original hooks.json content |
 | 5 | Wire installer and README | deploy/windows/install-windows.ps1, README.md | 4 | infra | install-windows.ps1 deploys the adapter and registers the hooks, and README lists a Droid row in the harness table |
 | 6 | Verify end to end | (no code) | 5 | test | A real Droid session crossing review_threshold logs review_spawned and review_complete in personas/default/observations.jsonl |
+
+## Auth research result (2026-11-02, pending approval)
+- docs.factory.com/droid-exec/overview and droid-cli/cli-reference document only FACTORY_API_KEY for droid exec, framed for CI. They do not mention the stored-login fallback or stripping env vars from child processes.
+- docs.factory.com/harness/hooks: "Hooks run automatically with your local environment and credentials" and "hooks inherit your local environment". Whether FACTORY_API_KEY survives into hook processes is unverified (it is stripped from tool-call shells).
+- Verified locally: with FACTORY_API_KEY absent, `droid doctor --json --checks auth` exits 0 in ~0.6 s, makes no model call, and returns top-level "ok": true plus result id "auth.verify" status "pass" ("authenticated ... via stored login session").
+- Proposed preflight, mirroring the Cursor pattern (CURSOR_API_KEY short-circuit, then `agent status --format json`): pass if FACTORY_API_KEY is set; otherwise run `droid doctor --json --checks auth` and require auth.verify status "pass". Any timeout, non-JSON output or other status blocks the spawn and records one deduped auth_missing. Implemented as a resolveDroidAuth helper in autolearn-auth.mjs reusing probeAuth's spawn/timeout handling.
 <!-- SECTION:PLAN:END -->
