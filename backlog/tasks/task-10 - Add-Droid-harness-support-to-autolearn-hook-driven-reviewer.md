@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-02T18:34:00Z'
-updated_date: '2026-11-02T19:12:00Z'
+updated_date: '2026-11-02T19:13:00Z'
 labels: []
 dependencies: []
 references:
@@ -21,7 +21,7 @@ ordinal: 10000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-Droid (Factory) already picks up the shared autolearn skill from ~/.agents/skills/autolearn, but nothing triggers a review, so Droid sessions accumulate no memory, rules or skill evidence. Unlike Cursor, Droid exposes real lifecycle hooks: Stop fires as each turn ends, SessionEnd when a session closes, and PreCompact before compaction, and every payload carries session_id and transcript_path on stdin. That removes the need for the Cursor adapter transcript watcher, pid lock and Startup shortcut. Add an additive adapter in the same shape as plugin/autolearn-cursor.mjs, reusing the shared core throttle, review format and observation log, and register the hooks in ~/.factory/hooks.json without disturbing the existing Hindsight hooks. The reviewer runs headless through droid exec and needs FACTORY_API_KEY at User level; hooks inherit the Factory process environment, so a newly set key needs an app restart. The hook must never block a turn: read, spawn detached, print nothing, exit 0.
+Droid (Factory) already picks up the shared autolearn skill from ~/.agents/skills/autolearn, but nothing triggers a review, so Droid sessions accumulate no memory, rules or skill evidence. Unlike Cursor, Droid exposes real lifecycle hooks: Stop fires as each turn ends, SessionEnd when a session closes, and PreCompact before compaction, and every payload carries session_id and transcript_path on stdin. That removes the need for the Cursor adapter transcript watcher, pid lock and Startup shortcut. Add an additive adapter in the same shape as plugin/autolearn-cursor.mjs, reusing the shared core throttle, review format and observation log, and register the hooks in ~/.factory/hooks.json without disturbing the existing Hindsight and cc-safety-net hooks. The reviewer runs headless through droid exec, which authenticates with FACTORY_API_KEY when present and otherwise with the stored Droid login (see decision doc droid-auth-preflight). The hook must never block a turn: read, spawn detached, print nothing, exit 0.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -43,35 +43,37 @@ Droid (Factory) already picks up the shared autolearn skill from ~/.agents/skill
 
 <!-- SECTION:PLAN:BEGIN -->
 ## Approach
-Add plugin/autolearn-droid.mjs, a hook-driven adapter shaped like plugin/autolearn-cursor.mjs. It reuses autolearn-core.mjs (ensureStore, parseConfig, formatReview, throttleCheck, spawnDetached, logObs, REVIEW_HEADING, HIDE_UV_VBS) and the dedupe helpers in autolearn-auth.mjs (readAuthState, writeAuthState, nextAuthState with scope "droid"). Droid fires real hooks, so the Cursor watcher, pid lock, slug reconstruction and Startup shortcut are not needed.
+Add plugin/autolearn-droid.mjs, a hook-driven adapter shaped like plugin/autolearn-cursor.mjs. It reuses autolearn-core.mjs (ensureStore, parseConfig, formatReview, throttleCheck, spawnDetached, logObs, REVIEW_HEADING, HIDE_UV_VBS) and autolearn-auth.mjs (a new resolveDroidAuth plus the existing readAuthState, writeAuthState and nextAuthState with scope "droid"). Droid fires real hooks, so the Cursor watcher, pid lock, slug reconstruction and Startup shortcut are not needed.
 
 ## Verified facts (2026-11-02)
 - Hooks live in ~/.factory/hooks.json. Current events: SessionStart, UserPromptSubmit, Stop, Notification (Hindsight) and PreToolUse (cc-safety-net). ~/.factory/settings.json has no hooks key. Registration must append to existing event arrays, never replace them.
+- Hook stdin carries session_id, transcript_path, cwd, permission_mode and hook_event_name (docs.factory.com/harness/hooks).
 - Transcripts: ~/.factory/sessions/<cwd-slug>/<session_id>.jsonl. Line 1 is type=session_start (has cwd). Messages are type=message with message.role and message.content as a block array. Other line types: agent_turn_outcome, compaction_state, todo_state.
 - User-role lines that are NOT genuine user messages: hook records (message.hookEventName set, content often empty), tool_result blocks, text blocks starting with "<system-reminder>", and "Skill \"x\" activated" notices. A genuine user message is a user line with at least one text block that is none of these.
-- droid exec authenticates through the Droid login store: it replied "autolearn-ok" with FACTORY_API_KEY removed from the environment. Factory strips FACTORY_API_KEY, HINDSIGHT_API_KEY and SECRETCTL_PASSWORD from child processes even though they are set at User scope.
-- droid has no auth status subcommand; droid doctor diagnoses auth (output format to be checked in step 3).
+- droid exec authenticates through the stored Droid login: it replied "autolearn-ok" with FACTORY_API_KEY absent. Factory strips FACTORY_API_KEY, HINDSIGHT_API_KEY and SECRETCTL_PASSWORD from tool-call shells even though they are set at User scope; whether hooks receive the key is unverified.
+- `droid doctor --json --checks auth` exits 0 in ~0.6 s with no model call and reports result id auth.verify, status "pass", when the stored login is usable.
 - review_complete is logged by the reviewer through autolearn.py log review-complete (reviewer.md), not by the adapter.
+
+## Decisions (accepted 2026-11-02, see decision doc droid-auth-preflight)
+- Auth preflight: pass if FACTORY_API_KEY is set; otherwise `droid doctor --json --checks auth` must report auth.verify "pass". Timeout, missing binary, non-JSON or any other status blocks the spawn and records one deduped auth_missing. Runs only when a review is due.
+- resolveDroidAuth lives in plugin/autolearn-auth.mjs beside the Cursor check, reusing probeAuth's spawn/timeout/Windows-shim handling; tests in plugin/test-auth-guard.mjs.
 
 ## Steps
 1. Transcript parser: parseDroidTranscript(text) returns ordered {role, content} for genuine user text and assistant text only, plus cwd from session_start. Pure function, unit-tested with fixtures built from the shapes above.
-2. Cadence: per-session state under personas/default/droid/<session_id>.json holding only lastReviewUserMsg and reviewedUpTo. userCount is recomputed from the transcript on every hook. Stop reviews when userCount - lastReviewUserMsg >= review_threshold. PreCompact and SessionEnd review any unreviewed slice (reviewedUpTo < messages.length) regardless of threshold. Throttle: throttleCheck(md,false) then throttleCheck(md,true) immediately before spawn; state advances only on an admitted spawn.
-3. Auth preflight (see open decision): before writing any file, verify the reviewer can authenticate; on failure record one deduped auth_missing observation (trigger "droid") and exit 0.
+2. Cadence: per-session state under personas/default/droid/<session_id>.json holding only lastReviewUserMsg and reviewedUpTo. userCount is recomputed from the transcript on every hook. Stop reviews when userCount - lastReviewUserMsg >= review_threshold. PreCompact and SessionEnd review any unreviewed slice regardless of threshold. Throttle: throttleCheck(md,false) then throttleCheck(md,true) immediately before spawn; state advances only on an admitted spawn.
+3. Auth preflight: add resolveDroidAuth to autolearn-auth.mjs (key short-circuit, then doctor probe and auth.verify classification) with tests; the adapter calls it after a review is due and before any file is written.
 4. Reviewer launch: droid exec --auto medium --cwd <session cwd> "<prompt naming the review file; load autolearn skill; follow references/reviewer.md>". Env adds AUTOLEARN_REVIEWER=1. On Windows route through wscript + hide-uv.vbs like the Cursor adapter so no console flashes. Log review_spawned with trigger "droid".
-5. Hook entry point (--hook): read stdin JSON, exit 0 immediately if AUTOLEARN_DISABLED=1 or AUTOLEARN_REVIEWER=1, or transcript contains REVIEW_HEADING. Dispatch on hook_event_name for Stop, SessionEnd, PreCompact. Wrap everything in try/catch, print nothing, always exit 0.
-6. Registration (--install / --install --remove): read ~/.factory/hooks.json, back it up, append one autolearn command entry ("node <path> --hook", timeout 30) to Stop, SessionEnd and PreCompact only if not already present (match on the autolearn-droid.mjs path), write back. --remove deletes only entries whose command references autolearn-droid.mjs and drops event keys left empty. hooksFile path overridable (AUTOLEARN_DROID_HOOKS) for tests.
-7. Tests: plugin/test-droid-adapter.mjs with node --test: parser filtering, cadence idempotency across repeated Stop calls, PreCompact slice, hook registration add/idempotent/remove preserving foreign entries, auth gate dedupe. No network, no real droid.
+5. Hook entry point (--hook): read stdin JSON, exit 0 immediately if AUTOLEARN_DISABLED=1 or AUTOLEARN_REVIEWER=1, or the transcript contains REVIEW_HEADING. Dispatch on hook_event_name for Stop, SessionEnd, PreCompact. Wrap everything in try/catch, print nothing, always exit 0.
+6. Registration (--install / --install --remove): read ~/.factory/hooks.json, back it up, append one autolearn command entry ("node <path> --hook", timeout 30) to Stop, SessionEnd and PreCompact only if absent (match on the autolearn-droid.mjs path), write back. --remove deletes only entries referencing autolearn-droid.mjs and drops event keys left empty. Hooks file path overridable (AUTOLEARN_DROID_HOOKS) for tests.
+7. Tests: plugin/test-droid-adapter.mjs with node --test: parser filtering, cadence idempotency across repeated Stop calls, PreCompact slice, registration add/idempotent/remove preserving foreign entries. No network, no real droid.
 8. Installer + docs: deploy/windows/install-windows.ps1 copies autolearn-droid.mjs + core + auth into ~/.factory/autolearn/ and runs --install; README harness table gains a Droid row.
-9. End to end (AC #11): with the hooks registered, run a Droid session past review_threshold and confirm review_spawned then review_complete in observations.jsonl.
-
-## Open decision (needs approval before step 3)
-AC #8 says "checks FACTORY_API_KEY". That would always fail: the key is stripped from Factory child processes and droid exec does not need it. Proposed replacement: preflight passes if FACTORY_API_KEY is in the env, otherwise probe the login store (droid doctor, or a minimal droid exec if doctor output is not machine-readable); failures record one deduped auth_missing. AC #8 text would be updated to match.
+9. End to end (AC #11): with the hooks registered, run a Droid session past review_threshold and confirm review_spawned then review_complete in observations.jsonl. Also confirm whether hook processes receive FACTORY_API_KEY and AUTOLEARN_REVIEWER.
 
 ## Risks
 - Hook processes may not inherit AUTOLEARN_REVIEWER=1 from the reviewer's droid exec; the REVIEW_HEADING transcript guard is the backstop.
-- A login-store probe costs time inside a hook; run it only when a review is actually due, not on every Stop.
+- Stored-login tokens expire within hours and refresh in the background; a lapse is caught by the preflight and recorded once.
 - Stop hook timeout: the hook must finish within its timeout; all heavy work is in the detached reviewer.
-- Blocks on the reviewer's permission level: --auto medium is assumed sufficient for uv run and writing ~/.autolearn; verify in step 9.
+- --auto medium is assumed sufficient for the reviewer's uv run and writes under ~/.autolearn; verify in step 9.
 
 ## Branching
 Single branch task/TASK-10 from main with one commit per manifest row; one PR to origin main (board lives on main per the 2026-11-02 consolidation decision).
@@ -81,19 +83,9 @@ Single branch task/TASK-10 from main with one commit per manifest row; one PR to
 | # | Title | Files | Depends On | Labels | Acceptance Criterion |
 |---|---|---|---|---|---|
 | 1 | Create Droid transcript parser and cadence state | plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | — | logic, test | Parser keeps only genuine user and assistant text, and repeated Stop evaluations over the same transcript trigger exactly one review, with tests passing |
-| 2 | Add auth preflight and reviewer launch | plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | 1 | logic, test | A due review with failed auth writes no review file and records one auth_missing; with auth ok it spawns droid exec detached with AUTOLEARN_REVIEWER=1, with tests passing |
+| 2 | Add Droid auth preflight and reviewer launch | plugin/autolearn-auth.mjs, plugin/test-auth-guard.mjs, plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | 1 | logic, test | A due review with failed auth writes no review file and records one auth_missing; with auth ok it spawns droid exec detached with AUTOLEARN_REVIEWER=1, with tests passing |
 | 3 | Add hook entry point and dispatch | plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | 2 | logic, test | --hook reads stdin, handles Stop, SessionEnd and PreCompact, prints nothing and exits 0 for every input including malformed JSON |
 | 4 | Add idempotent hook registration and removal | plugin/autolearn-droid.mjs, plugin/test-droid-adapter.mjs | 3 | infra, test | --install twice yields one autolearn entry per event with all foreign hooks intact, and --install --remove restores the original hooks.json content |
 | 5 | Wire installer and README | deploy/windows/install-windows.ps1, README.md | 4 | infra | install-windows.ps1 deploys the adapter and registers the hooks, and README lists a Droid row in the harness table |
 | 6 | Verify end to end | (no code) | 5 | test | A real Droid session crossing review_threshold logs review_spawned and review_complete in personas/default/observations.jsonl |
-
-## Auth research result (2026-11-02, pending approval)
-- docs.factory.com/droid-exec/overview and droid-cli/cli-reference document only FACTORY_API_KEY for droid exec, framed for CI. They do not mention the stored-login fallback or stripping env vars from child processes.
-- docs.factory.com/harness/hooks: "Hooks run automatically with your local environment and credentials" and "hooks inherit your local environment". Whether FACTORY_API_KEY survives into hook processes is unverified (it is stripped from tool-call shells).
-- Verified locally: with FACTORY_API_KEY absent, `droid doctor --json --checks auth` exits 0 in ~0.6 s, makes no model call, and returns top-level "ok": true plus result id "auth.verify" status "pass" ("authenticated ... via stored login session").
-- Proposed preflight, mirroring the Cursor pattern (CURSOR_API_KEY short-circuit, then `agent status --format json`): pass if FACTORY_API_KEY is set; otherwise run `droid doctor --json --checks auth` and require auth.verify status "pass". Any timeout, non-JSON output or other status blocks the spawn and records one deduped auth_missing. Implemented as a resolveDroidAuth helper in autolearn-auth.mjs reusing probeAuth's spawn/timeout handling.
-
-## Decisions accepted (2026-11-02)
-- Auth preflight: FACTORY_API_KEY if set, else `droid doctor --json --checks auth` must report auth.verify pass (decision doc droid-auth-preflight). AC #8 reworded to match.
-- The Droid auth helper (resolveDroidAuth) goes in plugin/autolearn-auth.mjs with tests in plugin/test-auth-guard.mjs. Manifest row 2 Files therefore become: plugin/autolearn-droid.mjs, plugin/autolearn-auth.mjs, plugin/test-auth-guard.mjs, plugin/test-droid-adapter.mjs.
 <!-- SECTION:PLAN:END -->
