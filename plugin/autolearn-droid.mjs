@@ -7,15 +7,18 @@
  * spawns a detached headless `droid exec` reviewer. It reuses autolearn-core's
  * config, formatReview, throttle and observation log.
  *
- * Usage: node autolearn-droid.mjs --hook   (registered on Stop, SessionEnd, PreCompact)
+ * Usage:
+ *   --hook               handle one Stop, SessionEnd or PreCompact hook (stdin JSON)
+ *   --install [--remove] add (or remove) the autolearn hooks in ~/.factory/hooks.json
  *
  * Environment: AUTOLEARN_HOME, AUTOLEARN_DISABLED, AUTOLEARN_DEBUG (as core),
- * plus AUTOLEARN_DROID_BIN (reviewer binary, default "droid").
+ * plus AUTOLEARN_DROID_BIN (reviewer binary, default "droid") and
+ * AUTOLEARN_DROID_HOOKS (hooks file, default ~/.factory/hooks.json).
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "fs"
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "fs"
 import { homedir } from "os"
-import { basename, join, resolve } from "path"
+import { basename, dirname, join, resolve } from "path"
 import { fileURLToPath } from "url"
 import * as core from "./autolearn-core.mjs"
 import { resolveDroidAuth, readAuthState, writeAuthState, nextAuthState } from "./autolearn-auth.mjs"
@@ -257,6 +260,95 @@ export function handleHook(raw, deps = {}) {
   }, deps)
 }
 
+// ---------------------------------------------------------------------------
+// Hook registration in ~/.factory/hooks.json (additive, reversible)
+// ---------------------------------------------------------------------------
+
+export const HOOKS_FILE = process.env.AUTOLEARN_DROID_HOOKS || join(FACTORY_HOME, "hooks.json")
+// Every autolearn entry is identified by this file name in its command, so
+// removal never touches another tool's hooks.
+export const ADAPTER_MARK = "autolearn-droid.mjs"
+export const HOOK_TIMEOUT_S = 30
+
+export function hookCommand(modulePath = fileURLToPath(import.meta.url)) {
+  return `node "${modulePath}" --hook`
+}
+
+const isOurs = (h) => h && typeof h.command === "string" && h.command.includes(ADAPTER_MARK)
+
+/** Strip autolearn hooks from one event's matcher groups; drop groups left empty. */
+function stripOurs(groups) {
+  const out = []
+  let removed = false
+  for (const g of groups) {
+    if (!g || !Array.isArray(g.hooks)) { out.push(g); continue }
+    const kept = g.hooks.filter(h => !isOurs(h))
+    if (kept.length === g.hooks.length) { out.push(g); continue }
+    removed = true
+    if (kept.length) out.push({ ...g, hooks: kept })
+  }
+  return { groups: out, removed }
+}
+
+/**
+ * Pure transform of a parsed hooks.json. Install appends one autolearn group
+ * to Stop, SessionEnd and PreCompact (replacing any earlier autolearn entry);
+ * remove strips autolearn entries everywhere and drops event keys it emptied.
+ */
+export function applyHookRegistration(config, { remove = false, command = hookCommand() } = {}) {
+  const next = { ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}) }
+  for (const event of Object.keys(next)) {
+    if (!Array.isArray(next[event])) continue
+    const { groups, removed } = stripOurs(next[event])
+    if (removed && !groups.length && (remove || !HOOK_EVENTS.has(event))) delete next[event]
+    else next[event] = groups
+  }
+  if (!remove) {
+    for (const event of HOOK_EVENTS) {
+      const groups = Array.isArray(next[event]) ? next[event] : []
+      next[event] = [...groups, { hooks: [{ type: "command", command, timeout: HOOK_TIMEOUT_S }] }]
+    }
+  }
+  return next
+}
+
+function detectFormat(raw) {
+  const m = /\n([ \t]+)\S/.exec(raw)
+  return { indent: m ? m[1] : 2, newline: raw.endsWith("\n") }
+}
+
+/**
+ * Register (or with remove, unregister) the autolearn hooks. Idempotent. Backs
+ * up the file before any change and refuses to touch a file it cannot parse,
+ * because rewriting it would drop every other tool's hooks.
+ */
+export function installHooks({ file = HOOKS_FILE, remove = false, command } = {}) {
+  let raw = ""
+  try { raw = readFileSync(file, "utf-8") } catch (err) {
+    if (err.code !== "ENOENT") return { ok: false, error: err.message }
+  }
+  let config = {}
+  if (raw.trim()) {
+    try { config = JSON.parse(raw) } catch (err) { return { ok: false, error: `unparseable ${file}: ${err.message}` } }
+  }
+  const next = applyHookRegistration(config, { remove, command })
+  const { indent, newline } = raw ? detectFormat(raw) : { indent: 2, newline: true }
+  const out = JSON.stringify(next, null, indent) + (newline ? "\n" : "")
+  if (out === raw) return { ok: true, changed: false, file }
+  if (remove && !raw) return { ok: true, changed: false, file }
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    let backup = null
+    if (raw) {
+      backup = `${file}.autolearn-${new Date().toISOString().replace(/[:.]/g, "-")}.bak`
+      copyFileSync(file, backup)
+    }
+    writeFileSync(file, out)
+    return { ok: true, changed: true, file, backup }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
 function readStdin() {
   if (process.stdin.isTTY) return ""
   try { return readFileSync(0, "utf-8") } catch { return "" }
@@ -268,7 +360,15 @@ function main(argv) {
     try { core.dbg("droid hook", handleHook(readStdin())) } catch {}
     return 0
   }
-  console.log("Usage: autolearn-droid.mjs --hook")
+  if (argv.includes("--install")) {
+    const remove = argv.includes("--remove")
+    const r = installHooks({ remove })
+    if (!r.ok) { console.error(`[autolearn] Droid hook ${remove ? "removal" : "install"} failed: ${r.error}`); return 1 }
+    const verb = remove ? "Removed autolearn hooks from" : "Registered autolearn hooks in"
+    console.log(r.changed ? `${verb} ${r.file}${r.backup ? ` (backup: ${r.backup})` : ""}` : `Hooks already up to date: ${r.file}`)
+    return 0
+  }
+  console.log("Usage: autolearn-droid.mjs [--hook | --install [--remove]]")
   return 0
 }
 

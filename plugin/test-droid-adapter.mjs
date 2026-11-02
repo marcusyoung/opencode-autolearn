@@ -327,3 +327,85 @@ test("--hook does nothing when autolearn is disabled", () => {
   assert.equal(r.status, 0)
   assert.deepEqual(reviews(), [])
 })
+
+// --- hook registration ----------------------------------------------------
+
+// Shape of the live ~/.factory/hooks.json (Hindsight + cc-safety-net), 2026-11-02.
+const FOREIGN = {
+  SessionStart: [{ hooks: [{ type: "command", command: "node \"C:\\h\\droid-sessionstart-hook.js\"", timeout: 30 }] }],
+  UserPromptSubmit: [{ hooks: [{ type: "command", command: "node \"C:\\h\\droid-hook.js\"", timeout: 30 }] }],
+  Stop: [{ hooks: [{ type: "command", command: "node \"C:\\h\\droid-stop-hook.js\"", timeout: 60 }] }],
+  Notification: [{ hooks: [{ type: "command", command: "node \"C:\\h\\droid-stop-hook.js\"", timeout: 60 }] }],
+  PreToolUse: [{ hooks: [{ type: "command", command: "npx -y cc-safety-net hook --droid", timeout: 30 }] }],
+}
+const CMD = 'node "C:\\Users\\me\\.factory\\autolearn\\autolearn-droid.mjs" --hook'
+
+function hooksFile(content) {
+  const dir = mkdtempSync(join(tmpdir(), "al-hooks-"))
+  const file = join(dir, "hooks.json")
+  if (content !== undefined) writeFileSync(file, content)
+  return file
+}
+const ours = (cfg, e) => (cfg[e] || []).flatMap(g => g.hooks).filter(h => h.command.includes("autolearn-droid.mjs"))
+
+test("install twice yields one autolearn entry per event with foreign hooks intact", () => {
+  const original = JSON.stringify(FOREIGN, null, 2) + "\n"
+  const file = hooksFile(original)
+  const first = droid.installHooks({ file, command: CMD })
+  const second = droid.installHooks({ file, command: CMD })
+  assert.deepEqual([first.changed, second.changed], [true, false])
+  const cfg = JSON.parse(readFileSync(file, "utf8"))
+  for (const e of ["Stop", "SessionEnd", "PreCompact"]) {
+    assert.equal(ours(cfg, e).length, 1, e)
+    assert.deepEqual(ours(cfg, e)[0], { type: "command", command: CMD, timeout: 30 })
+  }
+  for (const e of Object.keys(FOREIGN)) assert.deepEqual(cfg[e][0], FOREIGN[e][0], e)
+  assert.equal(cfg.Stop.length, 2)
+  assert.ok(existsSync(first.backup))
+  assert.equal(readFileSync(first.backup, "utf8"), original)
+})
+
+test("install --remove restores the original hooks.json content", () => {
+  for (const original of [JSON.stringify(FOREIGN, null, 2) + "\n", JSON.stringify(FOREIGN, null, 4), JSON.stringify(FOREIGN, null, "\t") + "\n"]) {
+    const file = hooksFile(original)
+    droid.installHooks({ file, command: CMD })
+    const r = droid.installHooks({ file, remove: true })
+    assert.equal(r.changed, true)
+    assert.equal(readFileSync(file, "utf8"), original)
+    assert.equal(droid.installHooks({ file, remove: true }).changed, false)
+  }
+})
+
+test("install replaces a stale autolearn path instead of adding a second entry", () => {
+  const file = hooksFile(JSON.stringify(FOREIGN, null, 2) + "\n")
+  droid.installHooks({ file, command: 'node "C:\\old\\autolearn-droid.mjs" --hook' })
+  droid.installHooks({ file, command: CMD })
+  const cfg = JSON.parse(readFileSync(file, "utf8"))
+  assert.deepEqual(ours(cfg, "Stop").map(h => h.command), [CMD])
+})
+
+test("remove keeps a foreign hook that shares a matcher group with autolearn", () => {
+  const mixed = { Stop: [{ hooks: [{ type: "command", command: "echo other" }, { type: "command", command: CMD }] }] }
+  const next = droid.applyHookRegistration(mixed, { remove: true })
+  assert.deepEqual(next, { Stop: [{ hooks: [{ type: "command", command: "echo other" }] }] })
+})
+
+test("install creates a missing hooks file and remove of a missing file is a no-op", () => {
+  const file = hooksFile()
+  assert.equal(droid.installHooks({ file, remove: true }).changed, false)
+  assert.equal(existsSync(file), false)
+  const r = droid.installHooks({ file, command: CMD })
+  assert.deepEqual([r.ok, r.changed, r.backup], [true, true, null])
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(file, "utf8"))).sort(), ["PreCompact", "SessionEnd", "Stop"])
+})
+
+test("install refuses to rewrite an unparseable hooks file", () => {
+  const file = hooksFile("{ broken")
+  const r = droid.installHooks({ file, command: CMD })
+  assert.equal(r.ok, false)
+  assert.equal(readFileSync(file, "utf8"), "{ broken")
+})
+
+test("the default hook command runs this module with --hook", () => {
+  assert.match(droid.hookCommand(), /^node ".*autolearn-droid\.mjs" --hook$/)
+})
