@@ -8,7 +8,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
-import { join } from "path"
+import { basename, join } from "path"
 import { spawnSync } from "child_process"
 import { fileURLToPath } from "url"
 
@@ -123,6 +123,15 @@ test("a forced event with no new user message does not review", () => {
   assert.equal(droid.planReview(messages, st, { event: "SessionEnd", threshold: 5 }), null)
 })
 
+test("a forced event reviews a lone pending user message", () => {
+  const { messages } = droid.parseDroidTranscript(jsonl([L.start(), L.user("prefer X from now on"), L.toolOnly()]))
+  for (const event of ["PreCompact", "SessionEnd"]) {
+    const plan = droid.planReview(messages, {}, { event, threshold: 5 })
+    assert.deepEqual(plan.slice, [{ role: "user", content: "prefer X from now on" }], event)
+  }
+  assert.equal(droid.planReview(messages, {}, { event: "Stop", threshold: 5 }), null)
+})
+
 test("a shrunken transcript clamps the cursors instead of re-reviewing", () => {
   const { messages } = droid.parseDroidTranscript(conversation(3))
   const st = { lastReviewUserMsg: 50, reviewedUpTo: 100 }
@@ -205,6 +214,21 @@ test("auth ok spawns once, logs review_spawned and advances the cursors", () => 
   const spawned = obs().filter(o => o.type === "review_spawned")
   assert.deepEqual([spawned.length, spawned[0].project, spawned[0].trigger, spawned[0].event], [1, "repo", "droid", "Stop"])
   assert.deepEqual(droid.loadState("a3"), { lastReviewUserMsg: 5, reviewedUpTo: 10 })
+})
+
+test("secrets are redacted before the review file is written", () => {
+  resetStore()
+  const dir = join(core.AL_HOME, "sessions")
+  mkdirSync(dir, { recursive: true })
+  const transcriptPath = join(dir, "sec.jsonl")
+  writeFileSync(transcriptPath, jsonl([L.start(), L.user("my password: example123456"), L.asst("api_key=abcdef0123456789 noted")]))
+  const calls = []
+  const r = droid.reviewSession({ sessionId: "sec", transcriptPath, event: "SessionEnd" }, { auth: () => ({ ok: true }), launch: (a) => calls.push(a), ensureStore: noStore })
+  assert.equal(r.status, "spawned")
+  const md = readFileSync(calls[0].reviewFile, "utf8")
+  assert.ok(!md.includes("example123456"))
+  assert.ok(!md.includes("abcdef0123456789"))
+  assert.match(md, /password: \[REDACTED\]/)
 })
 
 test("a throttled spawn leaves the cursors for the next hook", () => {
@@ -406,6 +430,7 @@ test("install refuses to rewrite an unparseable hooks file", () => {
   assert.equal(readFileSync(file, "utf8"), "{ broken")
 })
 
-test("the default hook command runs this module with --hook", () => {
-  assert.match(droid.hookCommand(), /^node ".*autolearn-droid\.mjs" --hook$/)
+test("the hook command uses the runtime that registered it", () => {
+  const runtime = basename(process.execPath).replace(/\.exe$/i, "")
+  assert.match(droid.hookCommand(), new RegExp(`^${runtime} ".*autolearn-droid\\.mjs" --hook$`))
 })

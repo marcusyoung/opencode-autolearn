@@ -68,9 +68,10 @@ bash agent-autolearn/install.sh
 
 1. Copies `plugin/autolearn.js` (v1), `plugin/autolearn-v2.js` (v2), and `plugin/autolearn-core.mjs` (shared) to `~/.config/opencode/plugins/`, plus `plugin/autolearn-pi.ts` and the shared core to `~/.pi/agent/extensions/`
 2. Copies `plugin/autolearn-cursor.mjs` and the shared core to `~/.cursor/`, writes the always-applied observer rule (`~/.cursor/rules/autolearn-observer.mdc`), and registers (or prints) the recurring transcript scan job
-3. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
-4. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
-5. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
+3. Copies `plugin/autolearn-droid.mjs` and the shared core to `~/.factory/autolearn/` and registers its `Stop`, `SessionEnd` and `PreCompact` hooks in `~/.factory/hooks.json`
+4. Installs the single consolidated `autolearn` skill (reviewer/observer/curator references + both CLIs) to `~/.agents/skills/autolearn/`, replacing the three legacy skill dirs
+5. Patches `~/.config/opencode/opencode.json` to register the v1 plugin under `plugin`, the v2 plugin under `plugins`, the instructions entry, and the reviewer agent
+6. Runs `autolearn.py init`, `retention score`, and `memory compose` to create and bootstrap `~/.autolearn/personas/default/`
 
 ### Verify
 

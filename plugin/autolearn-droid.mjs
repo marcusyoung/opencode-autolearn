@@ -132,8 +132,8 @@ export function planReview(messages, state = {}, { event = "Stop", threshold = c
   const upTo = Math.min(state.reviewedUpTo || 0, messages.length)
   if (!FORCE_EVENTS.has(event) && userCount - last < threshold) return null
   const slice = messages.slice(upTo)
-  if (slice.length < 2 || !slice.some(m => m.role === "user")) return null
-  return { slice, userCount, next: { lastReviewUserMsg: userCount, reviewedUpTo: messages.length } }
+  if (!slice.some(m => m.role === "user")) return null
+  return { slice, next: { lastReviewUserMsg: userCount, reviewedUpTo: messages.length } }
 }
 
 /**
@@ -210,7 +210,8 @@ export function reviewSession({ sessionId, transcriptPath, event = "Stop", cwd }
 
     const sessionCwd = parsed.cwd || cwd || ""
     const project = sessionCwd ? basename(sessionCwd.replace(/[\\/]+$/, "")) : "unknown"
-    const reviewMd = core.formatReview(plan.slice, { project, trigger: "droid" })
+    const redacted = plan.slice.map(m => ({ ...m, content: core.redact(m.content) }))
+    const reviewMd = core.formatReview(redacted, { project, trigger: "droid" })
     // Peek, then commit only when a spawn will actually happen.
     if (!core.throttleCheck(reviewMd, false)) return { status: "throttled" }
     if (!core.throttleCheck(reviewMd, true)) return { status: "throttled" }
@@ -270,8 +271,14 @@ export const HOOKS_FILE = process.env.AUTOLEARN_DROID_HOOKS || join(FACTORY_HOME
 export const ADAPTER_MARK = "autolearn-droid.mjs"
 export const HOOK_TIMEOUT_S = 30
 
-export function hookCommand(modulePath = fileURLToPath(import.meta.url)) {
-  return `node "${modulePath}" --hook`
+/**
+ * Runs the hook with the runtime that registered it, so a Bun-only install
+ * does not register a `node` command. The bare name matches the other hooks in
+ * hooks.json; the installer has already found it on PATH.
+ */
+export function hookCommand() {
+  const runtime = basename(process.execPath).replace(/\.exe$/i, "")
+  return `${runtime} "${fileURLToPath(import.meta.url)}" --hook`
 }
 
 const isOurs = (h) => h && typeof h.command === "string" && h.command.includes(ADAPTER_MARK)
