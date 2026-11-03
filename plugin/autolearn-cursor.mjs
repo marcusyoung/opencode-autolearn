@@ -208,12 +208,12 @@ export function saveState(id, st) {
  * route through the same WScript WindowStyle-0 launcher used for `uv`
  * (`hide-uv.vbs`) so the whole agent → powershell → node tree stays off-screen.
  */
-export function launchReviewer({ reviewFile, cwd }) {
-  const prompt = `The autolearn session review is the file at ${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
+export function launchReviewer({ reviewFile, cwd }, { spawn = core.spawnDetached, platform = process.platform } = {}) {
+  const prompt = `${core.REVIEWER_PROMPT_PREFIX}${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
   const env = { ...process.env, AUTOLEARN_REVIEWER: "1" }
   const opts = { cwd: cwd || CURSOR_HOME, env, unref: true }
   let argv
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     // Pass agent args as separate VBS arguments (same shape as hide-uv → uv).
     // Do not wrap a single `cmd /c "..."` string: VBS re-quotes each arg and
     // nested quotes in the prompt would break the Run command line.
@@ -227,7 +227,7 @@ export function launchReviewer({ reviewFile, cwd }) {
   } else {
     argv = [REVIEWER_BIN, "-p", "--force", prompt]
   }
-  return core.spawnDetached(argv, opts)
+  return spawn(argv, opts)
 }
 
 /**
@@ -235,11 +235,18 @@ export function launchReviewer({ reviewFile, cwd }) {
  * threshold is crossed. Idempotent: the absolute user count is recomputed from
  * the transcript each run, the reviewed slice advances only on an admitted
  * spawn, and core.throttleCheck dedupes identical content globally.
+ * `deps` exists for tests: auth, launch, ensureStore.
  */
-export function scan() {
+export function scan(deps = {}) {
+  const {
+    auth = () => resolveAuth(REVIEWER_BIN),
+    launch = launchReviewer,
+    ensureStore = core.ensureStore,
+  } = deps
   const result = { scanned: 0, spawned: 0 }
   if (process.env.AUTOLEARN_DISABLED === "1") return result
-  core.ensureStore()
+  if (process.env.AUTOLEARN_REVIEWER === "1") return result
+  ensureStore()
   const config = core.parseConfig()
   const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
 
@@ -248,16 +255,16 @@ export function scan() {
   // consumes no throttle window and orphans no review file. Without this guard
   // a dead credential is indistinguishable from a healthy pipeline: the
   // detached agent's stderr is discarded by the windowless launcher.
-  const auth = resolveAuth(REVIEWER_BIN)
-  const gate = nextAuthState(readAuthState(), auth, new Date(), "cursor")
+  const verdict = auth()
+  const gate = nextAuthState(readAuthState(), verdict, new Date(), "cursor")
   writeAuthState(gate.states)
   if (gate.record) {
-    core.logObs({ type: "auth_missing", trigger: "cursor", source: auth.source, reason: auth.reason })
-    core.dbg("cursor scan: auth preflight failed", auth.reason)
+    core.logObs({ type: "auth_missing", trigger: "cursor", source: verdict.source, reason: verdict.reason })
+    core.dbg("cursor scan: auth preflight failed", verdict.reason)
   }
-  if (!auth.ok) {
+  if (!verdict.ok) {
     result.authError = true
-    result.authReason = auth.reason
+    result.authReason = verdict.reason
     return result
   }
 
@@ -307,11 +314,9 @@ export function scan() {
       result.scanned++
       let text
       try { text = readFileSync(transcriptFile, "utf-8") } catch { core.dbg("cursor scan: unreadable", entry); continue }
-      // Depth guard: never review a transcript that contains review content
-      // (e.g. a reviewer's own headless session).
-      if (text.includes(core.REVIEW_HEADING)) continue
-
       const messages = parseTranscript(text)
+      // The watcher is separate from the reviewer, so identify each transcript.
+      if (core.isReviewerSession(messages)) continue
       if (messages.length < 2) continue
       const userCount = messages.filter(m => m.role === "user").length
 
@@ -339,7 +344,7 @@ export function scan() {
       }
 
       try {
-        launchReviewer({ reviewFile, cwd })
+        launch({ reviewFile, cwd })
       } catch (err) {
         core.dbg("cursor scan: launch failed", err.message)
         try { writeFileSync(join(core.AL_HOME, `review-failed-${Date.now()}.md`), reviewMd) } catch {}

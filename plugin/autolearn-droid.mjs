@@ -145,7 +145,7 @@ export function planReview(messages, state = {}, { event = "Stop", threshold = c
  * escape its closing quote.
  */
 export function reviewerArgv({ reviewFile, cwd }, platform = process.platform) {
-  const prompt = `The autolearn session review is the file at ${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
+  const prompt = `${core.REVIEWER_PROMPT_PREFIX}${reviewFile} - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it.`
   const args = [REVIEWER_BIN, "exec", "--auto", "medium"]
   const dir = cwd ? String(cwd).replace(/[\\/]+$/, "") : ""
   if (dir) args.push("--cwd", dir)
@@ -189,11 +189,9 @@ export function reviewSession({ sessionId, transcriptPath, event = "Stop", cwd }
     if (!sessionId || !transcriptPath) return { status: "no_transcript" }
     let text
     try { text = readFileSync(transcriptPath, "utf-8") } catch { return { status: "no_transcript" } }
-    // Depth guard: never review a transcript that contains review content,
-    // which is the reviewer's own session if the env marker did not reach it.
-    if (text.includes(core.REVIEW_HEADING)) return { status: "reviewer_session" }
-
     const parsed = parseDroidTranscript(text)
+    // Fallback when the env marker did not reach the reviewer's hooks.
+    if (core.isReviewerSession(parsed.messages)) return { status: "reviewer_session" }
     ensureStore()
     const config = core.parseConfig()
     const threshold = config.review_threshold || core.THRESHOLD_DEFAULT
