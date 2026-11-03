@@ -1,11 +1,11 @@
 ---
 id: TASK-10.1
 title: Prevent normal sessions from being mistaken for autolearn reviewers
-status: In Progress
+status: Done
 assignee:
   - Droid
 created_date: '2026-11-02T23:57:00Z'
-updated_date: '2026-11-03T00:04:00Z'
+updated_date: '2026-11-03T00:07:00Z'
 labels: []
 dependencies: []
 references:
@@ -99,3 +99,9 @@ Final validation: node --test plugin/test-droid-adapter.mjs plugin/test-cursor-a
 
 No live deployment, hook changes, watcher restart, commit, push or PR performed. Implementation is ready for SDD review checkpoint #3; task remains In Progress until user review.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Fixed false reviewer-session classification in the Droid and Cursor adapters. Both use a shared anchored prefix check on the first parsed user message, with AUTOLEARN_REVIEWER=1 taking priority. Reading or quoting review content no longer skips a normal session. Added isolated Cursor scan/launch test seams and regression coverage for reviewer exclusion, contaminated normal sessions, cadence, idempotence, and deduplication. All 112 plugin tests, five module syntax checks, and git diff --check pass. User approved committing, pushing, and opening a PR after implementation review. No live deployment performed.
+<!-- SECTION:FINAL_SUMMARY:END -->
