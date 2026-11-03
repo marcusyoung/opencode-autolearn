@@ -5,13 +5,19 @@ status: In Progress
 assignee:
   - Droid
 created_date: '2026-11-02T23:57:00Z'
-updated_date: '2026-11-03T00:03:00Z'
+updated_date: '2026-11-03T00:04:00Z'
 labels: []
 dependencies: []
 references:
   - plugin/autolearn-droid.mjs
   - plugin/autolearn-cursor.mjs
   - plugin/autolearn-core.mjs
+modified_files:
+  - plugin/autolearn-core.mjs
+  - plugin/autolearn-cursor.mjs
+  - plugin/autolearn-droid.mjs
+  - plugin/test-droid-adapter.mjs
+  - plugin/test-cursor-adapter.mjs
 parent_task_id: TASK-10
 priority: high
 type: bug
@@ -26,11 +32,11 @@ Normal coding sessions can be silently skipped when their transcripts contain th
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Sessions marked AUTOLEARN_REVIEWER=1 remain excluded from review processing.
-- [ ] #2 An unmarked reviewer session is excluded when its first genuine user message begins with the known generated reviewer prompt prefix.
-- [ ] #3 A review heading or reviewer prompt prefix in tool output, assistant content, or a later user message does not by itself exclude a normal session.
-- [ ] #4 The corrected reviewer classification applies consistently to the Droid and Cursor transcript-driven adapters.
-- [ ] #5 Regression tests demonstrate both genuine reviewer exclusion and normal-session review eligibility, while existing cadence and deduplication tests remain passing.
+- [x] #1 Sessions marked AUTOLEARN_REVIEWER=1 remain excluded from review processing.
+- [x] #2 An unmarked reviewer session is excluded when its first genuine user message begins with the known generated reviewer prompt prefix.
+- [x] #3 A review heading or reviewer prompt prefix in tool output, assistant content, or a later user message does not by itself exclude a normal session.
+- [x] #4 The corrected reviewer classification applies consistently to the Droid and Cursor transcript-driven adapters.
+- [x] #5 Regression tests demonstrate both genuine reviewer exclusion and normal-session review eligibility, while existing cadence and deduplication tests remain passing.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -84,4 +90,12 @@ Implementation refinement: expose optional spawn/platform overrides on Cursor la
 
 <!-- SECTION:NOTES:BEGIN -->
 Plannotator approved the plan without annotations (decision=approved). Parent branch task/TASK-10 has no open PR; created task/TASK-10.1 from up-to-date main. Baseline: 84/84 plugin tests pass; syntax and git diff checks pass. Before production changes, new Droid fixtures reproduced seven expected failures, including normal tool-output contamination and genuine first-prompt reviewers.
+
+Implemented the approved five-file change on task/TASK-10.1. Shared REVIEWER_PROMPT_PREFIX and isReviewerSession inspect only the first parsed user message. Both launchers retain identical prompt text. Droid keeps its marker guard; Cursor now short-circuits on AUTOLEARN_REVIEWER=1 and uses the shared fallback per transcript. Cursor test dependency seams are optional and preserve existing defaults.
+
+AC1: environment-marker tests prove both adapters skip without store/auth/launch execution. AC2: first genuine prompt fixtures, including Droid untagged exec and preceding harness notices, are excluded with no review file, throttle consumption, or cadence advance. AC3/4: both adapters admit heading-only first messages, tool/assistant/later-user contamination and quoted prefixes, and ignore no-user transcripts. AC5: tests prove actual admitted spawns, review file writes, state advance, unchanged-input idempotence, threshold cadence, and Cursor duplicate-content rejection.
+
+Final validation: node --test plugin/test-droid-adapter.mjs plugin/test-cursor-adapter.mjs plugin/test-auth-guard.mjs plugin/test-schedule-health.mjs => 112/112 passing, zero skipped. node --check passes for all five changed modules; git diff --check passes. No npm lint/typecheck scripts or test CI gate are configured in package.json/the inspected workflow. Full codebase index refreshed after changes.
+
+No live deployment, hook changes, watcher restart, commit, push or PR performed. Implementation is ready for SDD review checkpoint #3; task remains In Progress until user review.
 <!-- SECTION:NOTES:END -->
