@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - Droid
 created_date: '2026-11-02T23:57:00Z'
-updated_date: '2026-11-02T23:59:00Z'
+updated_date: '2026-11-03T00:03:00Z'
 labels: []
 dependencies: []
 references:
@@ -76,4 +76,12 @@ Fix false reviewer classification in the Droid and Cursor transcript adapters on
 | # | Title | Files | Depends On | Labels | Acceptance Criterion |
 |---|---|---|---|---|---|
 | 1 | Narrow reviewer detection in both transcript adapters and add regression coverage | plugin/autolearn-core.mjs, plugin/autolearn-droid.mjs, plugin/autolearn-cursor.mjs, plugin/test-droid-adapter.mjs, plugin/test-cursor-adapter.mjs | — | logic, test | Both adapters reject genuine reviewers but admit normal sessions containing review text, with isolated regression tests and existing plugin checks passing. |
+
+Implementation refinement: expose optional spawn/platform overrides on Cursor launchReviewer, matching Droid's existing seam, so its generated prompt and reviewer environment can be asserted without executing a real CLI or Windows launcher. This is additive, uses only the already-listed Cursor adapter/test files, and leaves default call behavior unchanged. scan's two existing internal callers remain no-argument compatible.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Plannotator approved the plan without annotations (decision=approved). Parent branch task/TASK-10 has no open PR; created task/TASK-10.1 from up-to-date main. Baseline: 84/84 plugin tests pass; syntax and git diff checks pass. Before production changes, new Droid fixtures reproduced seven expected failures, including normal tool-output contamination and genuine first-prompt reviewers.
+<!-- SECTION:NOTES:END -->
