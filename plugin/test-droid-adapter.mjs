@@ -242,20 +242,85 @@ test("a throttled spawn leaves the cursors for the next hook", () => {
   assert.deepEqual(droid.loadState("a4"), {})
 })
 
-test("the reviewer's own session is never reviewed", () => {
+test("the reviewer environment marker skips before reading a transcript", () => {
   resetStore()
-  const dir = join(core.AL_HOME, "sessions")
-  mkdirSync(dir, { recursive: true })
-  const p = join(dir, "rv.jsonl")
-  writeFileSync(p, conversation(6).replace("question 1", "# Autolearn Review"))
-  const deps = { auth: () => ({ ok: true }), launch: () => { throw new Error("must not launch") }, ensureStore: noStore }
-  assert.equal(droid.reviewSession({ sessionId: "rv", transcriptPath: p }, deps).status, "reviewer_session")
+  const unexpected = () => { throw new Error("must not run") }
+  const previous = process.env.AUTOLEARN_REVIEWER
   process.env.AUTOLEARN_REVIEWER = "1"
   try {
-    assert.equal(droid.reviewSession({ sessionId: "a5", transcriptPath: writeTranscript("a5", 6) }, deps).status, "reviewer_session")
+    assert.equal(droid.reviewSession({}, { auth: unexpected, launch: unexpected, ensureStore: unexpected }).status, "reviewer_session")
   } finally {
-    delete process.env.AUTOLEARN_REVIEWER
+    if (previous === undefined) delete process.env.AUTOLEARN_REVIEWER
+    else process.env.AUTOLEARN_REVIEWER = previous
   }
+})
+
+const REVIEWER_PROMPT = "The autolearn session review is the file at /reviews/review-1.md - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it."
+const toolText = (text) => ({ type: "message", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: text }] } })
+
+for (const [name, lines, reviewer] of [
+  ["first untagged exec prompt", [L.reminder(), L.hook(), L.skill(), L.execPrompt(REVIEWER_PROMPT), L.asst("reading file")], true],
+  ["first typed prompt after notices", [L.reminder(), L.hook(), L.user(REVIEWER_PROMPT), L.asst("reading file")], true],
+  ["heading alone in the first user message", [L.user("# Autolearn Review"), L.asst("normal response")], false],
+  ["heading and prompt in tool output", [L.user("read autolearn source"), toolText(`# Autolearn Review\n${REVIEWER_PROMPT}`), L.asst("done")], false],
+  ["heading and prompt in assistant text", [L.user("explain the guard"), L.asst(`# Autolearn Review\n${REVIEWER_PROMPT}`)], false],
+  ["prompt in assistant text before the first user", [L.asst(REVIEWER_PROMPT), L.user("normal question")], false],
+  ["heading and prompt in later user messages", [L.user("normal question"), L.asst("ok"), L.user(`# Autolearn Review\n${REVIEWER_PROMPT}`)], false],
+  ["prompt prefix at the start of a later user message", [L.user("normal question"), L.asst("ok"), L.user(REVIEWER_PROMPT)], false],
+  ["prompt quoted mid-message", [L.user(`Explain this prompt: ${REVIEWER_PROMPT}`), L.asst("ok")], false],
+]) {
+  test(`Droid depth guard: ${name}`, () => {
+    resetStore()
+    const dir = join(core.AL_HOME, "sessions")
+    mkdirSync(dir, { recursive: true })
+    const transcriptPath = join(dir, "guard.jsonl")
+    writeFileSync(transcriptPath, jsonl([L.start(), ...lines]))
+    let probed = 0
+    let ensured = 0
+    const calls = []
+    const deps = {
+      auth: () => { probed++; return { ok: true, source: "env" } },
+      launch: (args) => calls.push(args),
+      ensureStore: () => { ensured++ },
+    }
+    const input = { sessionId: "guard", transcriptPath, event: "SessionEnd" }
+    const result = droid.reviewSession(input, deps)
+    assert.equal(result.status, reviewer ? "reviewer_session" : "spawned")
+    assert.equal(calls.length, reviewer ? 0 : 1)
+    assert.equal(probed, reviewer ? 0 : 1)
+    assert.equal(ensured, reviewer ? 0 : 1)
+    if (reviewer) {
+      assert.deepEqual(droid.loadState("guard"), {})
+      assert.deepEqual(reviews(), [])
+      assert.ok(!existsSync(core.THROTTLE_FILE))
+    } else {
+      assert.equal(reviews().length, 1)
+      assert.match(readFileSync(calls[0].reviewFile, "utf8"), /Trigger: droid/)
+      assert.equal(droid.loadState("guard").lastReviewUserMsg, droid.parseDroidTranscript(jsonl(lines)).messages.filter(m => m.role === "user").length)
+      assert.equal(droid.reviewSession(input, deps).status, "not_due")
+      assert.equal(calls.length, 1)
+    }
+  })
+}
+
+test("Droid depth guard: no genuine user message is not due", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("empty", 0)
+  writeFileSync(transcriptPath, jsonl([L.start(), L.reminder(), toolText(REVIEWER_PROMPT), L.asst("# Autolearn Review")]))
+  assert.equal(droid.reviewSession({ sessionId: "empty", transcriptPath, event: "SessionEnd" }, { ensureStore: noStore }).status, "not_due")
+})
+
+test("Stop reviews a threshold-eligible session after it reads review source", () => {
+  resetStore()
+  const transcriptPath = writeTranscript("source", 5)
+  writeFileSync(transcriptPath, readFileSync(transcriptPath, "utf8") + jsonl([toolText(`# Autolearn Review\n${REVIEWER_PROMPT}`)]))
+  const calls = []
+  const deps = { auth: () => ({ ok: true }), launch: (args) => calls.push(args), ensureStore: noStore }
+  const input = { sessionId: "source", transcriptPath, event: "Stop" }
+  assert.equal(droid.reviewSession(input, deps).status, "spawned")
+  assert.equal(droid.loadState("source").lastReviewUserMsg, 5)
+  assert.equal(droid.reviewSession(input, deps).status, "not_due")
+  assert.equal(calls.length, 1)
 })
 
 test("a launch failure keeps the review in a fallback file and does not advance", () => {
@@ -273,6 +338,8 @@ test("reviewer argv runs droid exec headless with the review path", () => {
   const argv = droid.reviewerArgv({ reviewFile: "/h/review-1.md", cwd: "/repo/" }, "linux")
   assert.deepEqual(argv.slice(0, 6), ["droid", "exec", "--auto", "medium", "--cwd", "/repo"])
   assert.match(argv[6], /review-1\.md/)
+  assert.ok(argv[6].startsWith(core.REVIEWER_PROMPT_PREFIX))
+  assert.equal(argv[6], REVIEWER_PROMPT.replace("/reviews/review-1.md", "/h/review-1.md"))
   assert.ok(!argv[6].includes('"'), "hide-uv.vbs cannot carry double quotes")
 })
 

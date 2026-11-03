@@ -85,8 +85,15 @@ export const IDLE_COOLDOWN_MS = 300000
 export const MIN_INTERVAL_DEFAULT_MS = 180000 // 3 min between review starts, global (serializes bursts; dedupe handles same-content)
 export const MAX_REVIEWS_PER_DAY_DEFAULT = 60 // hard ceiling across all projects (~2.5/hr sustained)
 export const REVIEW_HEADING = "# Autolearn Review"
+export const REVIEWER_PROMPT_PREFIX = "The autolearn session review is the file at "
 export const DEBUG = process.env.AUTOLEARN_DEBUG === "1"
 export const DBG_FILE = join(AL_HOME, "debug.log")
+
+/** Identify a reviewer by its opening user prompt, never by quoted review text. */
+export function isReviewerSession(messages) {
+  const firstUser = messages.find(m => m.role === "user")
+  return Boolean(firstUser && firstUser.content.startsWith(REVIEWER_PROMPT_PREFIX))
+}
 
 export function dbg(...args) {
   if (!DEBUG) return
