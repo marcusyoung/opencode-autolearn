@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T19:31:00Z'
+updated_date: '2026-11-11T23:16:00Z'
 labels: []
 dependencies: []
 references:
@@ -101,4 +101,6 @@ Branch task/TASK-10.2 cut from main. Baseline: Python 122 passed, 2 pre-existing
 Rows 1-4 committed on task/TASK-10.2: 69ce63a parser+shared fixtures, d4616d0 Droid indexing, e28372f recurrence/scan refresh, 98e23dc docs. Parent rerun: Python 156 passed + 2 baseline test_wiki failures (TASK-9); node 97/97. Deviations: --full keeps rows of unreadable sources (protects OpenCode-era history); curator's internal proposer.scan not given refresh (curator promotion is OpenCode-only; proposals scan/recurrence refresh). Rehearsal on a copy of live search.db: init indexed 3359 Droid messages / 340 sessions from 485 transcripts in 5.0 s, OpenCode rows kept (466 -> 806 sessions), rerun 0 rows in 0.6 s; recurrence probes true (54, 41 sessions) for recent topics, false for nonsense. User asked to review the branch before live deploy (row 5).
 
 Draft PR #6 opened (task/TASK-10.2 -> main) for Droid review bot. Live deploy/backfill (row 5) waits for review.
+
+PR #6 review triage (6 bot comments, all on bc8fed6): fixed #1 failed transcript read recorded as indexed and #3 splitlines splitting on U+2028/U+0085 in 8395c5a (+3 tests); dismissed #2 unreadable sessions dir with --full (unsupported, rows rebuildable), #4 unused counters, #5 derive Droid status time from rows, #6 skip field (intentional). Replies posted and all 6 threads resolved. Tests: Python 159 passed + 2 baseline test_wiki failures (TASK-9); node 97/97.
 <!-- SECTION:NOTES:END -->
