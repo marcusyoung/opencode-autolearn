@@ -75,6 +75,9 @@ import shortcuts
 # See docs/designs/long-horizon-skills/LLD.md.
 import proposer
 
+# Factory Droid transcript parser (feeds the search index).
+import droid_sessions
+
 # Wiki layer (persistent pattern store + skill-impact ledger).
 # See docs/designs/wiki-layer/LLD.md.
 import wiki as wiki_layer
@@ -1278,7 +1281,7 @@ def cmd_curator_status(args):
 
 def get_search_conn() -> sqlite3.Connection:
     ensure_dirs()
-    conn = sqlite3.connect(str(SEARCH_DB))
+    conn = sqlite3.connect(str(SEARCH_DB), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
@@ -1317,6 +1320,13 @@ def init_search_schema(conn: sqlite3.Connection):
             time_created INTEGER NOT NULL,
             time_indexed INTEGER NOT NULL
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_session_text_droid_message
+            ON session_text_content(message_id) WHERE message_id LIKE 'droid:%';
+        CREATE TABLE IF NOT EXISTS droid_file_state(
+            path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL
+        );
     """)
 
 
@@ -1333,24 +1343,173 @@ def iso_from_unix_ms(unix_ms: int) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
+def _droid_project(cwd: str) -> str:
+    return cwd.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def index_droid(sconn: sqlite3.Connection, root: Path) -> dict:
+    """Index new or changed Droid transcripts under ``root`` into search.db.
+
+    Idempotent: rows are keyed ``droid:<message uuid>`` behind a partial unique
+    index and inserted with INSERT OR IGNORE, so repeated, overlapping or
+    concurrent runs never duplicate. Unchanged files (same size and mtime) are
+    skipped on stat alone. New rows are added to the FTS table directly.
+    Transcripts are parsed before the write lock is taken.
+    """
+    result = {"files": 0, "changed_files": 0, "rows": 0, "sessions": 0, "max_ts": 0}
+    known = {
+        path: (size, mtime_ns)
+        for path, size, mtime_ns in sconn.execute("SELECT path, size, mtime_ns FROM droid_file_state")
+    }
+    pending = []
+    for path in droid_sessions.iter_transcripts(root):
+        result["files"] += 1
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        key = str(path)
+        if known.get(key) == (st.st_size, st.st_mtime_ns):
+            continue
+        # Stat is taken before the read so a write that lands mid-parse is
+        # picked up as a change on the next run.
+        meta, msgs = droid_sessions.parse_transcript(path)
+        pending.append((key, st.st_size, st.st_mtime_ns, meta, msgs))
+    result["changed_files"] = len(pending)
+    if not pending:
+        return result
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    touched: set[str] = set()
+    sconn.execute("BEGIN IMMEDIATE")
+    try:
+        for key, size, mtime_ns, meta, msgs in pending:
+            sid = meta["session_id"]
+            project = _droid_project(meta["cwd"])
+            for m in msgs:
+                cur = sconn.execute(
+                    "INSERT OR IGNORE INTO session_text_content "
+                    "(session_id, message_id, role, text, project, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                    [sid, f"droid:{m['id']}", m["role"], m["text"], project, m["ts_ms"]],
+                )
+                if not cur.rowcount:
+                    continue
+                sconn.execute(
+                    "INSERT INTO session_text(rowid, session_id, message_id, role, text, project, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [cur.lastrowid, sid, f"droid:{m['id']}", m["role"], m["text"], project, m["ts_ms"]],
+                )
+                result["rows"] += 1
+                touched.add(sid)
+                result["max_ts"] = max(result["max_ts"], m["ts_ms"])
+            # The count is recomputed from rows, never incremented, so a
+            # re-parse of a grown transcript cannot drift it.
+            count, first_ts = sconn.execute(
+                "SELECT COUNT(*), MIN(timestamp) FROM session_text_content "
+                "WHERE session_id = ? AND message_id LIKE 'droid:%'", [sid],
+            ).fetchone()
+            if count:
+                sconn.execute(
+                    "INSERT OR REPLACE INTO indexed_session "
+                    "(session_id, title, project, message_count, time_created, time_indexed) VALUES (?, ?, ?, ?, ?, ?)",
+                    [sid, meta["title"] or "Untitled", project, count, first_ts, now_ms],
+                )
+            sconn.execute(
+                "INSERT OR REPLACE INTO droid_file_state (path, size, mtime_ns) VALUES (?, ?, ?)",
+                [key, size, mtime_ns],
+            )
+        if result["max_ts"]:
+            prev = sconn.execute(
+                "SELECT value FROM index_state WHERE key = 'last_droid_message_time'"
+            ).fetchone()
+            if not prev or result["max_ts"] > int(prev[0]):
+                sconn.execute(
+                    "INSERT OR REPLACE INTO index_state (key, value) VALUES ('last_droid_message_time', ?)",
+                    [str(result["max_ts"])],
+                )
+        sconn.commit()
+    except BaseException:
+        sconn.rollback()
+        raise
+    result["sessions"] = len(touched)
+    return result
+
+
+def _clear_search_index(sconn: sqlite3.Connection, *, opencode: bool, droid: bool) -> None:
+    """Delete indexed data for the given sources only.
+
+    A source that is unavailable keeps its rows: they may be the only copy of
+    that history, so a rebuild must not wipe what it cannot re-read.
+    """
+    droid_sids = [r[0] for r in sconn.execute(
+        "SELECT DISTINCT session_id FROM session_text_content WHERE message_id LIKE 'droid:%'"
+    )]
+    if droid:
+        sconn.execute("DELETE FROM session_text_content WHERE message_id LIKE 'droid:%'")
+        sconn.executemany("DELETE FROM indexed_session WHERE session_id = ?", [(s,) for s in droid_sids])
+        sconn.execute("DELETE FROM droid_file_state")
+        sconn.execute("DELETE FROM index_state WHERE key = 'last_droid_message_time'")
+    if opencode:
+        sconn.execute("DELETE FROM session_text_content WHERE message_id NOT LIKE 'droid:%'")
+        sconn.execute(
+            "DELETE FROM indexed_session WHERE session_id NOT IN "
+            "(SELECT session_id FROM session_text_content WHERE message_id LIKE 'droid:%')"
+        )
+        sconn.execute("DELETE FROM index_state WHERE key = 'last_part_time'")
+        sconn.execute("DELETE FROM index_state WHERE key = 'last_v2_message_time'")
+    sconn.commit()
+
+
 def cmd_search_init(args):
     full = getattr(args, "full", False)
     db_conn = get_opencode_conn()
-    if not db_conn:
-        print(f"OpenCode database not found at {OPENCODE_DB}")
+    droid_root = droid_sessions.sessions_root()
+    droid_available = droid_root.is_dir()
+    if not db_conn and not droid_available:
+        print(f"No session sources found: OpenCode database missing at {OPENCODE_DB}, "
+              f"Droid transcripts missing at {droid_root}")
         sys.exit(1)
 
     sconn = get_search_conn()
     init_search_schema(sconn)
 
     if full:
-        sconn.execute("DELETE FROM session_text_content")
-        sconn.execute("DELETE FROM indexed_session")
-        sconn.execute("DELETE FROM index_state WHERE key = 'last_part_time'")
-        sconn.execute("DELETE FROM index_state WHERE key = 'last_v2_message_time'")
-        sconn.commit()
+        _clear_search_index(sconn, opencode=bool(db_conn), droid=droid_available)
         print("Cleared existing index for full rebuild...")
 
+    count = v2_count = 0
+    max_time = v2_max_time = 0
+    if db_conn:
+        count, max_time, v2_count, v2_max_time = _index_opencode(sconn, db_conn)
+        db_conn.close()
+    droid_result = index_droid(sconn, droid_root) if droid_available else None
+
+    # Direct FTS inserts keep Droid rows searchable; a rebuild is only needed
+    # after OpenCode bulk inserts or a clear.
+    if db_conn or full:
+        sconn.execute("INSERT INTO session_text(session_text) VALUES ('rebuild')")
+    sconn.commit()
+    sconn.close()
+
+    droid_rows = droid_result["rows"] if droid_result else 0
+    if count == 0 and v2_count == 0 and droid_rows == 0:
+        print("Index is up to date. No new messages to index.")
+    else:
+        parts_summary = []
+        if count:
+            parts_summary.append(f"{count} v1 text parts (up to {iso_from_unix_ms(max_time)})")
+        if v2_count:
+            parts_summary.append(f"{v2_count} v2 text parts (up to {iso_from_unix_ms(v2_max_time)})")
+        if droid_rows:
+            parts_summary.append(
+                f"{droid_rows} Droid messages from {droid_result['sessions']} sessions "
+                f"(up to {iso_from_unix_ms(droid_result['max_ts'])})"
+            )
+        print(f"Indexed {' + '.join(parts_summary)}")
+
+
+def _index_opencode(sconn: sqlite3.Connection, db_conn: sqlite3.Connection) -> tuple[int, int, int, int]:
+    """Index OpenCode v1 and v2 text parts. Returns (v1 count, v1 max time, v2 count, v2 max time)."""
     last_mark_row = sconn.execute(
         "SELECT value FROM index_state WHERE key = 'last_part_time'"
     ).fetchone()
@@ -1522,20 +1681,8 @@ def cmd_search_init(args):
             [str(v2_max_time)],
         )
 
-    sconn.execute("INSERT INTO session_text(session_text) VALUES ('rebuild')")
     sconn.commit()
-    sconn.close()
-    db_conn.close()
-
-    if count == 0 and v2_count == 0:
-        print("Index is up to date. No new messages to index.")
-    else:
-        parts_summary = []
-        if count:
-            parts_summary.append(f"{count} v1 text parts (up to {iso_from_unix_ms(max_time)})")
-        if v2_count:
-            parts_summary.append(f"{v2_count} v2 text parts (up to {iso_from_unix_ms(v2_max_time)})")
-        print(f"Indexed {' + '.join(parts_summary)}")
+    return count, max_time, v2_count, v2_max_time
 
 
 def cmd_search_query(args):
@@ -1712,6 +1859,17 @@ def cmd_search_status(args):
         print(f"  Last indexed part (v2): {iso_from_unix_ms(last_v2_mark)}")
     else:
         print(f"  Last indexed part (v2): never")
+    droid_files = sconn.execute("SELECT COUNT(*) FROM droid_file_state").fetchone()[0]
+    droid_rows, droid_sessions_n = sconn.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT session_id) FROM session_text_content WHERE message_id LIKE 'droid:%'"
+    ).fetchone()
+    last_droid_row = sconn.execute(
+        "SELECT value FROM index_state WHERE key = 'last_droid_message_time'"
+    ).fetchone()
+    last_droid = int(last_droid_row["value"]) if last_droid_row else 0
+    print(f"  Droid transcripts tracked: {droid_files}")
+    print(f"  Droid messages indexed: {droid_rows} across {droid_sessions_n} sessions")
+    print(f"  Last indexed message (Droid): {iso_from_unix_ms(last_droid) if last_droid else 'never'}")
     print(f"  Database size: {db_size / (1024 * 1024):.1f} MB")
     print(f"  Database path: {SEARCH_DB}")
     sconn.close()
