@@ -413,7 +413,7 @@ def _scan_skill_dirs_for_repair() -> dict:
 # @spec LH-PROP-001..003 — full proposer loop as a single CLI entry point
 def cmd_proposals_scan(args):
     """scan -> verify -> promote. Self-contained for frequent (scheduled) runs."""
-    summary = proposer.scan(ACTIVE_PERSONA_DIR)
+    summary = proposer.scan(ACTIVE_PERSONA_DIR, refresh=refresh_droid_index)
     print(f"Scanned {summary['sessions_scanned']} sessions: "
           f"{summary['new']} new proposals, {summary['updated']} updated "
           f"({summary['proposals_total']} total).")
@@ -1433,6 +1433,31 @@ def index_droid(sconn: sqlite3.Connection, root: Path) -> dict:
         raise
     result["sessions"] = len(touched)
     return result
+
+
+def refresh_droid_index(persona_dir: Path) -> dict | None:
+    """Incrementally index Droid transcripts into ``persona_dir``/search.db.
+
+    Injected into the proposer so recurrence reads current evidence. It opens
+    the same file the proposer reads, and does nothing when there is no Droid
+    transcript root. Unchanged files cost one stat each.
+    """
+    root = droid_sessions.sessions_root()
+    if not root.is_dir():
+        return None
+    db_path = Path(persona_dir) / "search.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=10)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        init_search_schema(conn)
+        return index_droid(conn, root)
+    finally:
+        conn.close()
+
+
+def cmd_proposals_recurrence(args):
+    proposer.cmd_proposals_recurrence(args, refresh=refresh_droid_index)
 
 
 def _clear_search_index(sconn: sqlite3.Connection, *, opencode: bool, droid: bool) -> None:
@@ -2725,7 +2750,7 @@ def main():
         "proposals": {
             "list": proposer.cmd_proposals_list,
             "scan": cmd_proposals_scan,
-            "recurrence": proposer.cmd_proposals_recurrence,
+            "recurrence": cmd_proposals_recurrence,
             "confirm": proposer.cmd_proposals_confirm,
             "dismiss": proposer.cmd_proposals_dismiss,
         },

@@ -352,3 +352,112 @@ def test_status_reports_droid_state(env, capsys):
     assert "Droid transcripts tracked: 1" in out
     assert "Droid messages indexed: 2 across 1 sessions" in out
     assert "Last indexed message (Droid): never" not in out
+
+
+# --- recurrence refresh (proposals recurrence / scan) -------------------------
+
+import time
+
+import proposer
+
+REQUEST = "please rotate the staging certificates before deploying the release"
+
+
+def recurrent(env, refresh=autolearn.refresh_droid_index) -> dict:
+    return proposer.is_recurrent(env.persona, REQUEST, refresh=refresh)
+
+
+def test_recurrence_true_across_three_typed_droid_sessions_without_prior_init(env):
+    for sid in ("s1", "s2", "s3"):
+        write_session(env.root, sid, [REQUEST])
+    assert not env.search_db.exists()
+    res = recurrent(env)
+    assert res["recurrent"] is True and res["sessions_count"] == 3
+
+
+def test_recurrence_sees_session_written_after_last_init(env):
+    write_session(env.root, "s1", [REQUEST])
+    write_session(env.root, "s2", [REQUEST])
+    run_init()
+    write_session(env.root, "s3", [REQUEST])
+    stale = recurrent(env, refresh=None)
+    assert (stale["recurrent"], stale["sessions_count"]) == (False, 2)
+    fresh = recurrent(env)
+    assert (fresh["recurrent"], fresh["sessions_count"]) == (True, 3)
+    assert recurrent(env)["sessions_count"] == 3
+
+
+def test_threshold_is_unchanged(env):
+    assert proposer.DEFAULT_CONFIG["proposer_min_sessions"] == 3
+    assert proposer.SIMILARITY_THRESHOLD == 0.5
+
+
+def test_untagged_subagent_prompt_does_not_count_as_a_session(env):
+    write_session(env.root, "s1", [REQUEST])
+    write_session(env.root, "s2", [REQUEST])
+    write_session(env.root, "s3-subagent", [REQUEST], typed=False)
+    res = recurrent(env)
+    assert (res["recurrent"], res["sessions_count"]) == (False, 2)
+
+
+def test_reviewer_session_does_not_count_as_a_session(env):
+    write_session(env.root, "s1", [REQUEST])
+    write_session(env.root, "s2", [REQUEST])
+    d = env.root / "-C-work-demo"
+    review = {"type": "message", "id": "r1", "timestamp": "2026-11-11T10:00:00.000Z",
+              "message": {"role": "user", "content": [{"type": "text", "text": droid_sessions.REVIEWER_PROMPT_PREFIX + "x"}]}}
+    typed = {"type": "message", "id": "r2", "timestamp": "2026-11-11T10:00:01.000Z",
+             "message": {"role": "user", "userMessageSource": "desktop", "content": [{"type": "text", "text": REQUEST}]}}
+    (d / "s3-reviewer.jsonl").write_text(json.dumps(review) + "\n" + json.dumps(typed) + "\n", encoding="utf-8")
+    res = recurrent(env)
+    assert (res["recurrent"], res["sessions_count"]) == (False, 2)
+
+
+def test_refresh_failure_falls_back_to_existing_index(env, capsys):
+    write_session(env.root, "s1", [REQUEST])
+    write_session(env.root, "s2", [REQUEST])
+    write_session(env.root, "s3", [REQUEST])
+    run_init()
+
+    def boom(_persona_dir):
+        raise sqlite3.OperationalError("database is locked")
+
+    res = recurrent(env, refresh=boom)
+    assert (res["recurrent"], res["sessions_count"]) == (True, 3)
+    assert "refresh failed" in capsys.readouterr().err
+
+
+def test_refresh_without_droid_root_creates_nothing(env):
+    env.root.rmdir()
+    assert autolearn.refresh_droid_index(env.persona) is None
+    assert not env.search_db.exists()
+    res = recurrent(env)
+    assert res["recurrent"] is False
+
+
+def test_recurrence_cli_refreshes_before_reading(env, monkeypatch, capsys):
+    for sid in ("s1", "s2", "s3"):
+        write_session(env.root, sid, [REQUEST])
+    monkeypatch.setenv("AUTOLEARN_HOME", str(env.home))
+    autolearn.cmd_proposals_recurrence(argparse.Namespace(text=REQUEST, persona=None))
+    assert "recurrent=true sessions_count=3" in capsys.readouterr().out
+
+
+def test_scan_runs_refresh_before_reading(env):
+    calls = []
+    proposer.scan(env.persona, refresh=lambda p: calls.append(p))
+    assert calls == [env.persona]
+
+
+def test_refresh_of_unchanged_transcripts_is_cheap(env):
+    for i in range(500):
+        write_session(env.root, f"bulk-{i:03d}", [f"bulk request {i} about caching layers"],
+                      slug=f"-C-work-proj{i % 14}")
+    first = autolearn.refresh_droid_index(env.persona)
+    assert first["rows"] == 1000
+    start = time.perf_counter()
+    again = autolearn.refresh_droid_index(env.persona)
+    elapsed = time.perf_counter() - start
+    print(f"\nrefresh of 500 unchanged transcripts: {elapsed * 1000:.0f} ms")
+    assert again["rows"] == 0 and again["changed_files"] == 0 and again["files"] == 500
+    assert elapsed < 5
