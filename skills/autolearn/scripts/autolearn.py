@@ -1373,7 +1373,11 @@ def index_droid(sconn: sqlite3.Connection, root: Path) -> dict:
             continue
         # Stat is taken before the read so a write that lands mid-parse is
         # picked up as a change on the next run.
-        meta, msgs = droid_sessions.parse_transcript(path)
+        try:
+            meta, msgs = droid_sessions.parse_transcript(path)
+        except OSError:
+            # Leave the file unrecorded so the next refresh retries it.
+            continue
         pending.append((key, st.st_size, st.st_mtime_ns, meta, msgs))
     result["changed_files"] = len(pending)
     if not pending:

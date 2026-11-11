@@ -243,6 +243,23 @@ def test_lost_file_state_cannot_duplicate_rows(env):
     conn.close()
 
 
+def test_read_failure_is_retried_on_next_run(env, monkeypatch):
+    write_session(env.root, "sess-a", ["first request about caching layers"])
+    real = droid_sessions.parse_transcript
+
+    def failing(path):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(droid_sessions, "parse_transcript", failing)
+    run_init()
+    conn = db(env)
+    assert conn.execute("SELECT COUNT(*) FROM droid_file_state").fetchone()[0] == 0
+    conn.close()
+    monkeypatch.setattr(droid_sessions, "parse_transcript", real)
+    run_init()
+    assert content_count(env) == 2
+
+
 def test_concurrent_indexers_produce_no_duplicates(env):
     for i in range(6):
         write_session(env.root, f"sess-{i}", [f"request number {i} about caching layers", "second line"])

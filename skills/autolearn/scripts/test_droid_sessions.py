@@ -74,12 +74,26 @@ def test_quoted_reviewer_text_in_later_message_does_not_skip(tmp_path):
     assert len(msgs) == 2
 
 
-def test_malformed_and_missing_files_do_not_raise(tmp_path):
+def test_malformed_lines_are_skipped(tmp_path):
     p = tmp_path / "bad.jsonl"
     p.write_text("{not json\n\n42\nnull\n[1]\n", encoding="utf-8")
     assert droid_sessions.parse_transcript(p)[1] == []
-    meta, msgs = droid_sessions.parse_transcript(tmp_path / "missing.jsonl")
-    assert msgs == [] and meta["session_id"] == "missing"
+
+
+def test_unreadable_file_raises_so_callers_can_retry(tmp_path):
+    with pytest.raises(OSError):
+        droid_sessions.parse_transcript(tmp_path / "missing.jsonl")
+
+
+def test_unicode_line_separators_inside_text_are_kept(tmp_path):
+    text = "first part\u2028second part\u0085third part"
+    rec = {"type": "message", "id": "u1", "timestamp": "2026-11-11T10:00:00Z",
+           "message": {"role": "user", "userMessageSource": "desktop",
+                       "content": [{"type": "text", "text": text}]}}
+    p = tmp_path / "sep.jsonl"
+    p.write_text(json.dumps(rec, ensure_ascii=False) + "\r\n", encoding="utf-8")
+    _, msgs = droid_sessions.parse_transcript(p)
+    assert [m["text"] for m in msgs] == [text]
 
 
 def test_iso_timestamp_converts_to_epoch_ms():

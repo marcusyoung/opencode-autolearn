@@ -67,18 +67,19 @@ def parse_transcript(path: Path) -> tuple[dict, list[dict]]:
     typed user text and assistant text, each ``{id, role, text, ts_ms}``.
     Reviewer and curator sessions return no messages, identified by their
     opening user prompt as in ``isReviewerSession`` in autolearn-core.mjs.
+    Raises ``OSError`` when the file cannot be read, so callers can retry it
+    instead of recording it as an empty transcript.
     """
     path = Path(path)
     meta: dict = {"session_id": path.stem, "title": "", "cwd": "", "skip": None}
     messages: list[dict] = []
     first_user: str | None = None
     last_ts = 0
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return meta, messages
+    raw = path.read_text(encoding="utf-8", errors="replace")
 
-    for lineno, line in enumerate(raw.splitlines(), 1):
+    # Split on "\n" only: splitlines() also breaks on U+2028/U+0085, which
+    # JSON.stringify writes unescaped inside strings.
+    for lineno, line in enumerate(raw.split("\n"), 1):
         line = line.strip()
         if not line:
             continue
