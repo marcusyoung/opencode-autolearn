@@ -1,11 +1,11 @@
 ---
 id: TASK-10.2
 title: Restore recurrence evidence from Droid sessions
-status: In Progress
+status: Done
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T23:20:00Z'
+updated_date: '2026-11-11T23:22:00Z'
 labels: []
 dependencies: []
 references:
@@ -14,6 +14,20 @@ references:
   - skills/autolearn/scripts/proposer.py
   - plugin/autolearn-droid.mjs
   - https://github.com/marcusyoung/opencode-autolearn/pull/6
+modified_files:
+  - skills/autolearn/scripts/droid_sessions.py
+  - skills/autolearn/scripts/autolearn.py
+  - skills/autolearn/scripts/proposer.py
+  - skills/autolearn/scripts/test_droid_sessions.py
+  - skills/autolearn/scripts/test_search_droid.py
+  - plugin/fixtures/droid-transcript.jsonl
+  - plugin/fixtures/droid-transcript.expected.json
+  - plugin/fixtures/droid-transcript-reviewer.jsonl
+  - plugin/fixtures/droid-transcript-curator.jsonl
+  - plugin/test-droid-adapter.mjs
+  - skills/autolearn/references/reviewer.md
+  - skills/autolearn/references/cli.md
+  - README.md
 parent_task_id: TASK-10
 priority: high
 type: bug
@@ -106,3 +120,41 @@ PR #6 review triage (6 bot comments, all on bc8fed6): fixed #1 failed transcript
 
 Row 5 live deploy 2026-11-11 23:18 local. Backups: ~/.autolearn/backups/task-10.2-20261111-231813/ (search.db via SQLite backup API, 19685 rows, integrity ok; full copy of ~/.agents/skills/autolearn, 73 files). Deployed 7 files (autolearn.py, proposer.py, droid_sessions.py, 2 test files, reviewer.md, cli.md); SHA-256 match repo 8395c5a. Live search init: 3373 Droid messages / 341 sessions / 486 transcripts in 4.1 s; OpenCode rows kept (466 -> 807 sessions); rerun added 0. Independent check: 171 raw sessions with typed text, 170 indexed with user rows; the 1 difference (f6df353b) is a fork whose 3 messages are indexed under 0f0a97e4 (intended dedupe). 0 duplicate droid ids; 13 of today's sessions indexed; FTS 'plannotator' hits 21 Droid sessions. proposals recurrence: true (54) for a recent topic, false for nonsense. skill list 60 before and after: no skill created.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Restored cross-session recurrence evidence for new-skill creation under Droid. The `proposals recurrence` gate had read only a search index frozen on 2026-09-30, because its sole source (OpenCode's opencode.db) was gone.
+
+What changed (branch task/TASK-10.2, draft PR #6):
+- `droid_sessions.py` parses `~/.factory/sessions/**/<id>.jsonl`. It indexes typed user messages and assistant text only. droid exec and subagent prompts, hook records, reminders, tool output, and reviewer and curator sessions are excluded. Shared fixtures are asserted by both pytest and the node adapter tests.
+- `search init` indexes every available source and exits 1 only when none exists. Droid rows are keyed `droid:<uuid>` behind a partial unique index with `INSERT OR IGNORE`, so reruns, concurrent runs and forks never duplicate. Unchanged files are skipped on a stat alone, FTS is updated directly, and `search status` reports the Droid state.
+- `proposals recurrence` and `proposals scan` refresh the Droid index before reading. A failed refresh falls back to the existing index. The threshold is unchanged (at least 3 sessions, overlap at least 0.5).
+- Docs: reviewer.md Step 3, cli.md and the README search and backfill procedure.
+
+Approved deviations:
+- `--full` keeps rows from sources it cannot read, which protects the OpenCode-era history.
+- The curator's internal scan is not refreshed (curator promotion is OpenCode-only).
+
+PR review: 6 bot comments.
+- Fixed in 8395c5a: an unreadable transcript is now retried instead of recorded as indexed, and JSONL is split on newlines only (U+2028/U+0085).
+- Dismissed 4 with reasons. All threads were answered and resolved.
+
+Validation:
+- Python: 159 passed. The only failures are 2 in test_wiki.py that predate this work (TASK-9).
+- Node: 97/97.
+- Refresh of 500 unchanged transcripts: about 28 ms.
+
+Live deploy (2026-11-11):
+- Backups are in `~/.autolearn/backups/task-10.2-20261111-231813/`. 7 files were deployed, with hashes matching the repo.
+- The backfill indexed 3,373 Droid messages from 341 sessions in 4.1 s, and the OpenCode rows were kept. A rerun added 0.
+- An independent count found 171 sessions with typed text and 170 indexed; the remaining one is a fork already indexed under its original session. There are 0 duplicates.
+- Recurrence: true for a recent topic, false for nonsense. Skill count 60 before and after.
+
+Follow-ups:
+- TASK-12: the recurrence gate matches broad shared vocabulary.
+- Curator auto-promotion still uses only OpenCode outcomes.db.
+- October (Cursor-era) sessions are not indexed.
+- `~/.autolearn/bin/autolearn-core.mjs` is one commit stale.
+- PR #6 is still a draft.
+<!-- SECTION:FINAL_SUMMARY:END -->
