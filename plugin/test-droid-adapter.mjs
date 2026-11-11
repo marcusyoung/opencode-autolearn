@@ -74,6 +74,26 @@ test("parser skips malformed lines without throwing", () => {
   assert.equal(messages.length, 1)
 })
 
+// --- shared fixtures (also asserted by skills/autolearn/scripts/test_droid_sessions.py) ---
+
+const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf-8")
+
+test("shared fixture: parser output matches the expected genuine messages", () => {
+  const expected = JSON.parse(fixture("droid-transcript.expected.json"))
+  const { messages, cwd } = droid.parseDroidTranscript(fixture("droid-transcript.jsonl"))
+  assert.equal(cwd, expected.cwd)
+  assert.deepEqual(messages, expected.messages.map(m => ({ role: m.role, content: m.text })))
+  assert.equal(core.isReviewerSession(messages), false)
+})
+
+test("shared fixture: reviewer session is recognised, curator and normal sessions are not", () => {
+  const reviewer = droid.parseDroidTranscript(fixture("droid-transcript-reviewer.jsonl"))
+  const curator = droid.parseDroidTranscript(fixture("droid-transcript-curator.jsonl"))
+  assert.equal(core.isReviewerSession(reviewer.messages), true)
+  assert.equal(core.isReviewerSession(curator.messages), false)
+  assert.ok(curator.messages[0].content.startsWith("Load the autolearn skill and follow references/curator.md"))
+})
+
 // --- cadence --------------------------------------------------------------
 
 test("Stop below the threshold does not review", () => {

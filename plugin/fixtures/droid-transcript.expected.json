@@ -1,0 +1,49 @@
+{
+  "title": "Rotate staging certificates",
+  "cwd": "C:\\work\\demo-repo",
+  "skip": null,
+  "messages": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "role": "user",
+      "text": "How do I rotate the staging certificates?",
+      "typed": true,
+      "ts_ms": 1794391202250
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000004",
+      "role": "assistant",
+      "text": "Start by listing the certificates.",
+      "typed": false,
+      "ts_ms": 1794391204250
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "role": "user",
+      "text": "Also check\n\nthe expiry dates.",
+      "typed": true,
+      "ts_ms": 1794391207250
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000009",
+      "role": "user",
+      "text": "Summarise the repository layout in one paragraph.",
+      "typed": false,
+      "ts_ms": 1794391209250
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000012",
+      "role": "assistant",
+      "text": "All done.",
+      "typed": false,
+      "ts_ms": 1794391212250
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000013",
+      "role": "user",
+      "text": "/resume abc",
+      "typed": true,
+      "ts_ms": 1794391213250
+    }
+  ]
+}
