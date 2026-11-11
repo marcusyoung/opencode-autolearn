@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T19:03:00Z'
+updated_date: '2026-11-11T19:08:00Z'
 labels: []
 dependencies: []
 references:
@@ -94,4 +94,6 @@ Teach `autolearn.py search init` to index Droid transcripts (`~/.factory/session
 
 <!-- SECTION:NOTES:BEGIN -->
 Plan approved 2026-11-11 via Plannotator gate. User note: complete the manifest as a todo list rather than separate Backlog subtasks. Single branch task/TASK-10.2.
+
+Branch task/TASK-10.2 cut from main. Baseline: Python 122 passed, 2 pre-existing failures in scripts/test_wiki.py (test_write_pattern_line_cap, test_enabled_false; TASK-9). Node plugin tests 95/95. Rows 1-4 delegated to a worker; row 5 (live deploy/backfill) held in the parent.
 <!-- SECTION:NOTES:END -->
