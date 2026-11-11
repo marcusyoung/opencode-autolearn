@@ -1,9 +1,11 @@
 ---
 id: TASK-10.2
 title: Restore recurrence evidence from Droid sessions
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@droid'
 created_date: '2026-11-11T18:43:00Z'
+updated_date: '2026-11-11T18:44:00Z'
 labels: []
 dependencies: []
 references:
