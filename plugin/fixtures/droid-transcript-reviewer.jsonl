@@ -1,0 +1,4 @@
+{"type": "session_start", "id": "fixture-reviewer-0001", "title": "Review", "cwd": "C:\\work\\demo-repo"}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000001", "timestamp": "2026-11-11T10:00:01.250Z", "seq": 1, "message": {"role": "user", "content": [{"type": "text", "text": "The autolearn session review is the file at C:\\tmp\\review.md - read that file first. Load the autolearn skill and follow references/reviewer.md to act on it."}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000002", "timestamp": "2026-11-11T10:00:02.250Z", "seq": 2, "message": {"role": "assistant", "content": [{"type": "text", "text": "Reading the review file."}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000003", "timestamp": "2026-11-11T10:00:03.250Z", "seq": 3, "message": {"role": "user", "content": [{"type": "text", "text": "How do I rotate the staging certificates?"}], "userMessageSource": "desktop"}}

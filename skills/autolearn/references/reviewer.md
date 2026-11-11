@@ -68,13 +68,29 @@ returns "No results" with exit code 0. So an error-based check for "index not
 existing" is a dead branch: it never fires and the index never self-populates.
 Instead: if `search query` returns "No results" unexpectedly, or the index may
 never have been built (fresh / ~40KB search.db), run `autolearn.py search init`
-FIRST (idempotent full rebuild from OpenCode's opencode.db), then retry the
-query. Verify population by row count (`SELECT COUNT(*) FROM session_text > 0`),
-not file size — search.db is in WAL mode and size lags.
-Staleness check: run `search status` and compare "Last indexed part (v1)"
-against the newest review in `~/.autolearn/personas/default/reviews/` — if any
-review postdates the watermark, run `search init` (incremental) to catch the
-index up before relying on query results.
+FIRST, then retry the query. `search init` is incremental and idempotent: it
+indexes every available source (OpenCode's `opencode.db` and, for Factory Droid,
+the transcripts under `~/.factory/sessions/**/<session_id>.jsonl`) and exits 1
+only when neither exists. Droid rows are keyed by message id, so rerunning adds
+nothing; `search init --full` rebuilds only the sources it can currently read
+and keeps rows from a source that has gone. Verify population by row count
+(`SELECT COUNT(*) FROM session_text > 0`), not file size — search.db is in WAL
+mode and size lags.
+
+**Droid evidence rules.** Only typed user messages and assistant text are
+indexed. `droid exec` and subagent prompts (no typed-source tag), reviewer and
+curator sessions are skipped, so a delegated prompt never counts as a second
+session. `proposals recurrence` and `proposals scan` refresh the Droid part of
+the index themselves before reading, so recurrence evidence is current without
+running `search init`. A failed refresh is logged to stderr and the existing
+index is used.
+
+Staleness check (for `search query` results): run `search status` and compare
+"Last indexed message (Droid)" and "Last indexed part (v1)" against the newest
+review in `~/.autolearn/personas/default/reviews/` — if any review postdates
+the watermark, run `search init` (incremental) to catch the index up before
+relying on query results. `Droid transcripts tracked: 0` means the Droid source
+has never been indexed.
 
 ### Step 3.5: Read the wiki before concluding or proposing (MANDATORY)
 

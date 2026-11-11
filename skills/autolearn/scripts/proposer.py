@@ -20,8 +20,10 @@ import json
 import hashlib
 import os
 import sqlite3
+import sys
 from datetime import date
 from pathlib import Path
+from typing import Callable
 
 import falsify
 import outcomes
@@ -63,6 +65,23 @@ def _search_conn(persona_dir: Path) -> sqlite3.Connection | None:
         return conn
     except sqlite3.Error:
         return None
+
+
+Refresh = Callable[[Path], object]
+
+
+def _run_refresh(refresh: Refresh | None, persona_dir: Path) -> None:
+    """Bring search.db up to date before reading it; never let a failure block the caller.
+
+    ``refresh`` is injected by autolearn.py (this module cannot import it), so
+    callers that only read an existing index pass nothing and stay DB-only.
+    """
+    if refresh is None:
+        return
+    try:
+        refresh(persona_dir)
+    except Exception as exc:  # fail-safe: fall back to the index as it stands
+        print(f"search index refresh failed, using existing index: {exc}", file=sys.stderr)
 
 
 def _outcomes_idx(persona_dir: Path) -> outcomes.OutcomeIndex:
@@ -215,13 +234,15 @@ def _modal_command(commands: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 # @spec LH-PROP-001
-def scan(persona_dir: Path, *, config: dict | None = None) -> dict:
+def scan(persona_dir: Path, *, config: dict | None = None, refresh: Refresh | None = None) -> dict:
     """Cluster recent sessions by request_signature; refresh proposals.json.
 
     Returns {sessions_scanned, proposals_total, new, updated}. Promotes nothing.
+    ``refresh`` (optional) updates search.db before it is read.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     persona_dir = _persona_dir_from(persona_dir)
+    _run_refresh(refresh, persona_dir)
     search_conn = _search_conn(persona_dir)
     idx = _outcomes_idx(persona_dir)
     proposals = _load(persona_dir)
@@ -339,18 +360,22 @@ def promote_ready(persona_dir: Path) -> list[dict]:
 
 
 # @spec LH-PROP-004
-def is_recurrent(persona_dir: Path, request_text: str, *, config: dict | None = None) -> dict:
+def is_recurrent(persona_dir: Path, request_text: str, *, config: dict | None = None,
+                 refresh: Refresh | None = None) -> dict:
     """The reviewer's hard-gate check: does this request recur across >= min_sessions?
 
     Uses Jaccard similarity (>= SIMILARITY_THRESHOLD) so varied wordings of the
     same request count as a recurrence. Fail-safe: if search.db is missing or
     unreadable, returns recurrent=False (the reviewer records a memory instead
-    rather than being blocked on a missing index).
+    rather than being blocked on a missing index). ``refresh`` (optional)
+    updates search.db before it is read; its failure falls back to the index
+    as it stands.
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     target_set = _stemmed_tokens(request_text)
     if len(target_set) < 2:
         return {"recurrent": False, "sessions_count": 0, "reason": "no signature"}
+    _run_refresh(refresh, Path(persona_dir))
     search_conn = _search_conn(persona_dir)
     if search_conn is None:
         return {"recurrent": False, "sessions_count": 0, "reason": "no search index"}
@@ -408,10 +433,10 @@ def cmd_proposals_scan(args):
     print(f"Verified {res['checked']} proposals: {res['verified']} passed (auto-promote-ready).")
 
 
-def cmd_proposals_recurrence(args):
+def cmd_proposals_recurrence(args, refresh: Refresh | None = None):
     persona_dir = registry_for(args)
     text = getattr(args, "text", "") or ""
-    res = is_recurrent(persona_dir, text)
+    res = is_recurrent(persona_dir, text, refresh=refresh)
     print(f"recurrent={'true' if res['recurrent'] else 'false'} "
           f"sessions_count={res['sessions_count']}")
 

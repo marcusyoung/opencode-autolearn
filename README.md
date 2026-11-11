@@ -235,9 +235,10 @@ uv run $AL/autolearn.py skill list
 # Curator (lifecycle management)
 uv run $AL/autolearn.py curator run
 
-# Session search (FTS5 over past harness conversations)
-uv run $AL/autolearn.py search init
+# Session search (FTS5 over past harness conversations: OpenCode and Factory Droid)
+uv run $AL/autolearn.py search init      # incremental; indexes every available source
 uv run $AL/autolearn.py search query "<terms>"
+uv run $AL/autolearn.py search status    # per-source watermarks, including Droid
 
 # Cross-machine sync (E2E-encrypted, opt-in)
 uv run $AL/autolearn.py sync login
@@ -277,7 +278,7 @@ The observer mode records corrections in-session via `improve.py observe`; the r
 │       ├── observations.jsonl     # event log (auto-trimmed to 1000 lines)
 │       ├── strengths.json         # reinforcement counters per memory entry
 │       ├── reviews/               # generated review markdown files
-│       ├── search.db              # FTS5 index over past sessions
+│       ├── search.db              # FTS5 index over past sessions (OpenCode + Droid)
 │       ├── bin/                   # wrapper scripts (review-runner.sh)
 │       ├── wiki/                  # pattern notebook + skill-impact ledger
 │       ├── skills/                # agent-created skills
@@ -363,7 +364,16 @@ On Windows the Task Scheduler action is `wscript` → `hide-run-wait.vbs` → `a
 
 **Recursive review spawning.** The adapters guard against this with an `AUTOLEARN_REVIEWER=1` environment variable in the spawned subprocess. If you see rapid-fire review entries in `observations.jsonl` seconds apart, verify this guard is in effect.
 
-**Search index issues.** If `search query` returns empty results, the index may not have been built yet. Run `search init` once to populate it, or `search init --full` for a complete rebuild. Use `search status` to check index size and coverage.
+**Search index issues.** If `search query` returns empty results, the index may not have been built yet. Run `search init` once to populate it, or `search init --full` for a rebuild of the sources that can currently be read (a missing source keeps its existing rows). Use `search status` to check index size and coverage.
+
+**Droid sessions and recurrence evidence.** `search init` indexes Factory Droid transcripts from `~/.factory/sessions/**/<session_id>.jsonl` (override the root with `AUTOLEARN_DROID_SESSIONS`), alongside OpenCode if `opencode.db` exists; it exits 1 only when neither source exists. Only typed user messages and assistant text are indexed. `droid exec` and subagent prompts, and autolearn reviewer and curator sessions, are skipped so they cannot inflate recurrence counts. `proposals recurrence` and `proposals scan` refresh the Droid part of the index themselves before reading (unchanged transcripts cost one stat each; a failed refresh is logged and the existing index is used), so the recurrence gate needs no scheduler. The threshold (3 sessions, overlap 0.5) is unchanged. Transcripts are local and the index stays under `~/.autolearn/`.
+
+To backfill a stale or frozen index (for example a Droid-only machine whose `search status` watermarks are weeks old):
+
+1. Stop other autolearn processes, then back up `~/.autolearn/personas/default/search.db` and its `search.db-wal` and `search.db-shm` files.
+2. Run `uv run ~/.agents/skills/autolearn/scripts/autolearn.py search init`.
+3. Run `search status`: "Last indexed message (Droid)" should be recent and "Droid transcripts tracked" should match the number of `.jsonl` transcripts.
+4. Run `search init` again: it must print `Index is up to date` (adds 0 rows).
 
 **Manual verification.** Confirm the store is healthy:
 

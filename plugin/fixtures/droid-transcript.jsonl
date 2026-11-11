@@ -1,0 +1,19 @@
+{"type": "session_start", "id": "fixture-session-0001", "title": "Rotate staging certificates", "cwd": "C:\\work\\demo-repo", "timestamp": "2026-11-11T10:00:00.250Z"}
+{not json
+{"type": "message", "id": "00000000-0000-4000-8000-000000000001", "timestamp": "2026-11-11T10:00:01.250Z", "seq": 1, "message": {"role": "user", "content": [{"type": "text", "text": "<system-reminder> Unified tool catalog </system-reminder>"}], "visibility": "llm_only"}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000002", "timestamp": "2026-11-11T10:00:02.250Z", "seq": 2, "message": {"role": "user", "content": [{"type": "text", "text": "How do I rotate the staging certificates?"}], "userMessageSource": "desktop"}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000003", "timestamp": "2026-11-11T10:00:03.250Z", "seq": 3, "message": {"role": "user", "content": [], "visibility": "user_only", "hookEventName": "Stop"}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000004", "timestamp": "2026-11-11T10:00:04.250Z", "seq": 4, "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "private reasoning"}, {"type": "text", "text": "Start by listing the certificates."}, {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {}}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000005", "timestamp": "2026-11-11T10:00:05.250Z", "seq": 5, "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "tool-2", "name": "Read", "input": {}}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000006", "timestamp": "2026-11-11T10:00:06.250Z", "seq": 6, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "ok"}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000007", "timestamp": "2026-11-11T10:00:07.250Z", "seq": 7, "message": {"role": "user", "content": [{"type": "text", "text": "Also check"}, {"type": "text", "text": "<system-reminder>ctx</system-reminder>"}, {"type": "text", "text": "the expiry dates."}], "userMessageSource": "desktop"}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000008", "timestamp": "2026-11-11T10:00:08.250Z", "seq": 8, "message": {"role": "user", "content": [{"type": "text", "text": "Skill \"sdd\" activated"}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000009", "timestamp": "2026-11-11T10:00:09.250Z", "seq": 9, "message": {"role": "user", "content": [{"type": "text", "text": "Summarise the repository layout in one paragraph."}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000010", "timestamp": "2026-11-11T10:00:10.250Z", "seq": 10, "message": {"role": "user", "content": [{"type": "text", "text": "Request interrupted by user"}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000011", "timestamp": "2026-11-11T10:00:11.250Z", "seq": 11, "message": {"role": "user", "content": [{"type": "text", "text": "Background task completed. task_id: abc"}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000012", "timestamp": "2026-11-11T10:00:12.250Z", "seq": 12, "message": {"role": "assistant", "content": [{"type": "text", "text": "All done."}]}}
+{"type": "message", "id": "00000000-0000-4000-8000-000000000013", "timestamp": "2026-11-11T10:00:13.250Z", "seq": 13, "message": {"role": "user", "content": [{"type": "text", "text": "/resume abc"}], "userMessageSource": "desktop"}}
+{"type": "todo_state", "todos": []}
+{"type": "compaction_state", "anchor": null}
+{"type": "agent_turn_outcome", "reason": "completed"}
+null
