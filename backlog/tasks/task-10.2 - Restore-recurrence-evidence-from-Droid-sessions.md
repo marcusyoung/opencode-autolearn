@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T18:57:00Z'
+updated_date: '2026-11-11T19:03:00Z'
 labels: []
 dependencies: []
 references:
@@ -89,3 +89,9 @@ Teach `autolearn.py search init` to index Droid transcripts (`~/.factory/session
 | 4 | Document indexing, freshness and backfill | skills/autolearn/references/reviewer.md, skills/autolearn/references/cli.md, README.md | 3 | docs | Docs describe Droid indexing, auto-refresh, status checks and the backfill procedure |
 | 5 | Deploy and backfill live index | (deploy, no code) | 4 | infra | Live search status shows today's Droid watermark, rerun adds 0 rows, and recent sessions are counted correctly with no skill created |
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Plan approved 2026-11-11 via Plannotator gate. User note: complete the manifest as a todo list rather than separate Backlog subtasks. Single branch task/TASK-10.2.
+<!-- SECTION:NOTES:END -->
