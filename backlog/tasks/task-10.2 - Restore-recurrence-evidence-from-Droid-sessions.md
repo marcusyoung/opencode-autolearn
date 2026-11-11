@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T23:16:00Z'
+updated_date: '2026-11-11T23:20:00Z'
 labels: []
 dependencies: []
 references:
@@ -28,13 +28,13 @@ Autolearn reviews and skill patches work under Droid, but new-skill recurrence c
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Droid user-session text is searchable and available to recurrence checks when the OpenCode database is absent; existing OpenCode search behaviour remains supported.
-- [ ] #2 Backfill includes available historical Droid sessions, preserves existing indexed evidence, and repeated or incremental indexing does not duplicate messages or inflate distinct-session counts.
-- [ ] #3 Ongoing Droid activity refreshes recurrence evidence through the normal operating workflow without manual index maintenance.
-- [ ] #4 Injected messages, tool output and Autolearn reviewer sessions do not create false recurrence evidence; the existing cross-session creation threshold remains unchanged.
-- [ ] #5 Automated tests cover missing OpenCode data, historical and incremental Droid indexing, duplicate prevention, source filtering and recurrence results.
-- [ ] #6 Deploy the tested fix with recoverable backups, backfill the live index and verify recent Droid sessions are searchable and counted correctly without forcing skill creation.
-- [ ] #7 Document the supported indexing, freshness checks and backfill procedure.
+- [x] #1 Droid user-session text is searchable and available to recurrence checks when the OpenCode database is absent; existing OpenCode search behaviour remains supported.
+- [x] #2 Backfill includes available historical Droid sessions, preserves existing indexed evidence, and repeated or incremental indexing does not duplicate messages or inflate distinct-session counts.
+- [x] #3 Ongoing Droid activity refreshes recurrence evidence through the normal operating workflow without manual index maintenance.
+- [x] #4 Injected messages, tool output and Autolearn reviewer sessions do not create false recurrence evidence; the existing cross-session creation threshold remains unchanged.
+- [x] #5 Automated tests cover missing OpenCode data, historical and incremental Droid indexing, duplicate prevention, source filtering and recurrence results.
+- [x] #6 Deploy the tested fix with recoverable backups, backfill the live index and verify recent Droid sessions are searchable and counted correctly without forcing skill creation.
+- [x] #7 Document the supported indexing, freshness checks and backfill procedure.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -103,4 +103,6 @@ Rows 1-4 committed on task/TASK-10.2: 69ce63a parser+shared fixtures, d4616d0 Dr
 Draft PR #6 opened (task/TASK-10.2 -> main) for Droid review bot. Live deploy/backfill (row 5) waits for review.
 
 PR #6 review triage (6 bot comments, all on bc8fed6): fixed #1 failed transcript read recorded as indexed and #3 splitlines splitting on U+2028/U+0085 in 8395c5a (+3 tests); dismissed #2 unreadable sessions dir with --full (unsupported, rows rebuildable), #4 unused counters, #5 derive Droid status time from rows, #6 skip field (intentional). Replies posted and all 6 threads resolved. Tests: Python 159 passed + 2 baseline test_wiki failures (TASK-9); node 97/97.
+
+Row 5 live deploy 2026-11-11 23:18 local. Backups: ~/.autolearn/backups/task-10.2-20261111-231813/ (search.db via SQLite backup API, 19685 rows, integrity ok; full copy of ~/.agents/skills/autolearn, 73 files). Deployed 7 files (autolearn.py, proposer.py, droid_sessions.py, 2 test files, reviewer.md, cli.md); SHA-256 match repo 8395c5a. Live search init: 3373 Droid messages / 341 sessions / 486 transcripts in 4.1 s; OpenCode rows kept (466 -> 807 sessions); rerun added 0. Independent check: 171 raw sessions with typed text, 170 indexed with user rows; the 1 difference (f6df353b) is a fork whose 3 messages are indexed under 0f0a97e4 (intended dedupe). 0 duplicate droid ids; 13 of today's sessions indexed; FTS 'plannotator' hits 21 Droid sessions. proposals recurrence: true (54) for a recent topic, false for nonsense. skill list 60 before and after: no skill created.
 <!-- SECTION:NOTES:END -->
