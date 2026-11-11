@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T18:43:00Z'
-updated_date: '2026-11-11T19:29:00Z'
+updated_date: '2026-11-11T19:31:00Z'
 labels: []
 dependencies: []
 references:
@@ -13,6 +13,7 @@ references:
   - skills/autolearn/scripts/autolearn.py
   - skills/autolearn/scripts/proposer.py
   - plugin/autolearn-droid.mjs
+  - https://github.com/marcusyoung/opencode-autolearn/pull/6
 parent_task_id: TASK-10
 priority: high
 type: bug
@@ -98,4 +99,6 @@ Plan approved 2026-11-11 via Plannotator gate. User note: complete the manifest 
 Branch task/TASK-10.2 cut from main. Baseline: Python 122 passed, 2 pre-existing failures in scripts/test_wiki.py (test_write_pattern_line_cap, test_enabled_false; TASK-9). Node plugin tests 95/95. Rows 1-4 delegated to a worker; row 5 (live deploy/backfill) held in the parent.
 
 Rows 1-4 committed on task/TASK-10.2: 69ce63a parser+shared fixtures, d4616d0 Droid indexing, e28372f recurrence/scan refresh, 98e23dc docs. Parent rerun: Python 156 passed + 2 baseline test_wiki failures (TASK-9); node 97/97. Deviations: --full keeps rows of unreadable sources (protects OpenCode-era history); curator's internal proposer.scan not given refresh (curator promotion is OpenCode-only; proposals scan/recurrence refresh). Rehearsal on a copy of live search.db: init indexed 3359 Droid messages / 340 sessions from 485 transcripts in 5.0 s, OpenCode rows kept (466 -> 806 sessions), rerun 0 rows in 0.6 s; recurrence probes true (54, 41 sessions) for recent topics, false for nonsense. User asked to review the branch before live deploy (row 5).
+
+Draft PR #6 opened (task/TASK-10.2 -> main) for Droid review bot. Live deploy/backfill (row 5) waits for review.
 <!-- SECTION:NOTES:END -->
