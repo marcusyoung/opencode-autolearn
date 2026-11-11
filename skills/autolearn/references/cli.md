@@ -47,11 +47,11 @@ uv run $AL/improve.py <command>       # behavioral rules + AGENTS.md escalation
 
 | Command | Purpose |
 |---------|---------|
-| `search init` / `search query "<terms>"` / `search sessions "<terms>"` / `search status` | FTS5 search over past sessions |
+| `search init` / `search query "<terms>"` / `search sessions "<terms>"` / `search status` | FTS5 search over past sessions. `init` is incremental and indexes OpenCode (`opencode.db`) and Factory Droid (`~/.factory/sessions/**/*.jsonl`, typed user text and assistant text only); it exits 1 only if neither source exists. `init --full` rebuilds only sources it can read. `status` shows Droid transcripts tracked, messages indexed and the last Droid message time |
 | `log review-complete --observations N [--memory-updated] [--user-profile-updated] [--skills-created N] [--skills-patched N] --topics "<t1,t2>"` | Log review outcome |
 | `log review-complete --nothing` | Log an empty-handed review |
-| `proposals recurrence "<terms>"` | Recurrence gate for skill creation |
-| `proposals scan` | Long-horizon scan → verify → promote (scheduled tick) |
+| `proposals recurrence "<terms>"` | Recurrence gate for skill creation (refreshes the Droid part of the index first; threshold unchanged) |
+| `proposals scan` | Long-horizon scan → verify → promote (scheduled tick; refreshes the Droid index first) |
 | `topics scan` / `topics candidates` | Recurring-preference (shift) detector |
 | `outcomes init` / `outcomes status` | Tool-call outcome index (Certified Procedures spine) |
 | `falsify run` / `falsify verdicts` | Verify skills against their claims |
