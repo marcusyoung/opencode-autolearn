@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T23:26:00Z'
-updated_date: '2026-11-12T00:16:00Z'
+updated_date: '2026-11-12T00:22:00Z'
 labels: []
 dependencies: []
 references:
@@ -17,6 +17,7 @@ references:
   - skills/autolearn/references/curator.md
   - plugin/autolearn-schedule.mjs
   - TASK-14
+  - https://github.com/marcusyoung/droid-plugins
 priority: medium
 type: bug
 ordinal: 16000
@@ -107,6 +108,15 @@ created: 2026-11-12T00:16:00Z
 ---
 
 Plannotator review 2026-11-12: plan not approved. The user wants this folded into a larger task that repackages Autolearn as a Factory Droid-only plugin in droid-plugins, dropping the other harnesses. TASK-13 is now a child of TASK-14 (TASK-14 depends on it). The housekeeping-only plan above targets this repo's files and must be re-planned against the new plugin before implementation.
+
+---
+
+author: @droid
+created: 2026-11-12T00:22:00Z
+
+---
+
+Superseded 2026-11-12: this work moved to the droid-plugins board (https://github.com/marcusyoung/droid-plugins). TASK-14 -> droid-plugins TASK-1; TASK-13 -> droid-plugins TASK-1.1 (housekeeping-only scope). Archive here during cleanup, with approval.
 
 ---
 <!-- COMMENTS:END -->
