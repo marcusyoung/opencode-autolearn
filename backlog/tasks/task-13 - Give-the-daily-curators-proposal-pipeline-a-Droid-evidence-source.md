@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@droid'
 created_date: '2026-11-11T23:26:00Z'
-updated_date: '2026-11-12T00:10:00Z'
+updated_date: '2026-11-12T00:16:00Z'
 labels: []
 dependencies: []
 references:
@@ -16,6 +16,7 @@ references:
   - skills/autolearn/scripts/proposer.py
   - skills/autolearn/references/curator.md
   - plugin/autolearn-schedule.mjs
+  - TASK-14
 priority: medium
 type: bug
 ordinal: 16000
@@ -96,3 +97,16 @@ Housekeeping only. The daily curator records skill use from Droid sessions, so i
 | 5 | Document curator sources | skills/autolearn/references/curator.md, skills/autolearn/references/cli.md, README.md | 3, 4 | docs | Docs describe Droid skill-use evidence, run ordering and the promotion skip |
 | 6 | Deploy and verify live | (deploy, no code) | 5 | infra | A live curator run counts Droid skill uses and the affected stale or archived skills are reported in the task |
 <!-- SECTION:PLAN:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @droid
+created: 2026-11-12T00:16:00Z
+
+---
+
+Plannotator review 2026-11-12: plan not approved. The user wants this folded into a larger task that repackages Autolearn as a Factory Droid-only plugin in droid-plugins, dropping the other harnesses. TASK-13 is now a child of TASK-14 (TASK-14 depends on it). The housekeeping-only plan above targets this repo's files and must be re-planned against the new plugin before implementation.
+
+---
+<!-- COMMENTS:END -->
