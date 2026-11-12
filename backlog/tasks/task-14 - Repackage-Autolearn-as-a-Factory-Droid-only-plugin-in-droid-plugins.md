@@ -4,6 +4,7 @@ title: Repackage Autolearn as a Factory Droid-only plugin in droid-plugins
 status: To Do
 assignee: []
 created_date: '2026-11-12T00:16:00Z'
+updated_date: '2026-11-12T00:22:00Z'
 labels: []
 dependencies:
   - TASK-13
@@ -34,3 +35,16 @@ Autolearn's core value is creating new skills automatically from repeated work. 
 - [ ] #7 Automated tests for the plugin live under tests/autolearn in droid-plugins and pass.
 - [ ] #8 The plugin README documents installation, configuration, scheduled jobs, the migration from the old installation, and how to roll back.
 <!-- AC:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @droid
+created: 2026-11-12T00:22:00Z
+
+---
+
+Superseded 2026-11-12: this work moved to the droid-plugins board (https://github.com/marcusyoung/droid-plugins). TASK-14 -> droid-plugins TASK-1; TASK-13 -> droid-plugins TASK-1.1 (housekeeping-only scope). Archive here during cleanup, with approval.
+
+---
+<!-- COMMENTS:END -->
